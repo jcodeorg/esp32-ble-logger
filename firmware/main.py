@@ -1,4 +1,5 @@
 import time
+import struct
 import bluetooth
 from machine import Pin, SoftI2C, RTC
 import ssd1306  # OLEDディスプレイ用（I2C用）
@@ -6,8 +7,8 @@ import ssd1306  # OLEDディスプレイ用（I2C用）
 # ==========================================
 # 1. 設定・初期化
 # ==========================================
-# I2Cピンの定義（お使いのボードに合わせてSCL/SDAを変更してください。例: SCL=22, SDA=21）
-i2c = SoftI2C(scl=Pin(22), sda=Pin(21))
+# I2Cピンの定義（お使いのボードに合わせてSCL/SDAを変更してください。例: SCL=23, SDA=22）
+i2c = SoftI2C(scl=Pin(23), sda=Pin(22))
 
 # OLEDディスプレイの初期化 (128x64解像度を想定)
 try:
@@ -20,6 +21,9 @@ rtc = RTC()
 
 # RAM上のログバッファ（ここに1時間ごとのデータを蓄積）
 log_buffer = []
+
+# BLEデバイス名（BLEUARTServer初期化後にセットされる）
+ble_device_name = ""
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
 MEASURE_INTERVAL = 3600 
@@ -44,11 +48,11 @@ def update_oled(temp, hum, status_msg="Running"):
     display.fill(0)
     
     # 画面表示のレイアウト
-    display.text("--- ESP32 Logger ---", 0, 0, 1)
-    display.text(f"Time: {get_formatted_time().split()[1]}", 0, 12, 1)
-    display.text(f"Temp: {temp:.1f} C", 0, 26, 1)
-    display.text(f"Hum : {hum:.1f} %", 0, 38, 1)
-    display.text(f"Logs: {len(log_buffer)} count", 0, 52, 1)
+    display.text(f"BLE: {ble_device_name}", 0, 0, 1)
+    display.text(f"Time: {get_formatted_time().split()[1]}", 0, 11, 1)
+    display.text(f"Temp: {temp:.1f} C", 0, 22, 1)
+    display.text(f"Hum : {hum:.1f} %", 0, 33, 1)
+    display.text(f"Logs: {len(log_buffer)} count", 0, 44, 1)
     
     display.show()
 
@@ -56,11 +60,15 @@ def update_oled(temp, hum, status_msg="Running"):
 # 2. BLE (Bluetooth Low Energy) 設定
 # ==========================================
 class BLEUARTServer:
-    def __init__(self, name="EnvLog-ESP32"):
+    def __init__(self, name=None):
         self._ble = bluetooth.BLE()
         self._ble.active(True)
         self._ble.irq(self._irq)
-        
+
+        if name is None:
+            mac = self._ble.config('mac')[1]  # 6バイトのMACアドレス
+            name = "EnvLog-" + self.get_friendly_name(mac)
+
         # Nordic UART Service の UUID
         self.UART_UUID = bluetooth.UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
         self.TX_UUID = bluetooth.UUID("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
@@ -78,7 +86,34 @@ class BLEUARTServer:
         ((self._tx_handle, self._rx_handle),) = self._ble.gatts_register_services(SERVICES)
         
         self._conn_handle = None
+        self._name = name
         self._advertise(name)
+
+    def get_friendly_name(self, unique_id):
+        """ユニークIDからフレンドリー名を生成"""
+        length = 5
+        letters = 5
+        codebook = [
+            ['z', 'v', 'g', 'p', 't'],
+            ['u', 'o', 'i', 'e', 'a'],
+            ['z', 'v', 'g', 'p', 't'],
+            ['u', 'o', 'i', 'e', 'a'],
+            ['z', 'v', 'g', 'p', 't']
+        ]
+        name = []
+        mac_padded = b'\x00\x00' + unique_id
+        _, n = struct.unpack('>II', mac_padded)
+        ld = 1
+        d = letters
+
+        for i in range(0, length):
+            h = (n % d) // ld
+            n -= h
+            d *= letters
+            ld *= letters
+            name.insert(0, codebook[i][h])
+
+        return "".join(name)
 
     def _irq(self, event, data):
         if event == 1: # 接続
@@ -87,7 +122,7 @@ class BLEUARTServer:
         elif event == 2: # 切断
             self._conn_handle = None
             print("[BLE] 切断されました")
-            self._advertise("EnvLog-ESP32")
+            self._advertise(self._name)
         elif event == 3: # データ受信 (Chromebookからの書き込み)
             conn_handle, value_handle = data
             if value_handle == self._rx_handle:
@@ -141,10 +176,11 @@ class BLEUARTServer:
 # 3. メインループ
 # ==========================================
 def main():
-    global last_measure_tick
+    global last_measure_tick, ble_device_name
     print("ESP32 環境ロガー起動")
     
     ble_server = BLEUARTServer()
+    ble_device_name = ble_server._name
     
     # 起動直後の初期値取得
     temp, hum = read_sensor()
