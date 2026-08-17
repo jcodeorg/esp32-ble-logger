@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ESP32 BLE Environment Logger - ダッシュボード</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; color: #333; background: #f9f9f9; }
+        .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1 { font-size: 22px; color: #2c3e50; margin-top: 0; }
+        button { background: #3498db; color: white; border: none; padding: 12px 20px; font-size: 15px; border-radius: 4px; cursor: pointer; margin: 5px 5px 5px 0; font-weight: bold; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        button.danger { background: #e74c3c; }
+        button.danger:hover { background: #c0392b; }
+        button.success { background: #2ecc71; }
+        button.success:hover { background: #27ae60; }
+        .status { font-weight: bold; padding: 4px 8px; border-radius: 4px; display: inline-block; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .connected { background: #d4edda; color: #155724; }
+        pre { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; max-height: 250px; overflow-y: auto; font-size: 13px; }
+        .info-text { font-size: 14px; color: #666; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>ESP32 環境ロガー管理ツール</h1>
+        <p class="info-text">ChromebookからBluetooth経由でデバイスに接続し、時刻同期やログの回収・蓄積を行います。</p>
+        <p>接続状態: <span id="connectionStatus" class="status disconnected">未接続</span></p>
+        <button id="connectBtn">1. デバイスに接続 ＆ 時刻同期</button>
+    </div>
+
+    <div class="card">
+        <h1>データ回収 ＆ 蓄積</h1>
+        <p class="info-text">数日おきに「データを取得して蓄積」を押すと、ブラウザ上にデータがどんどん溜まっていきます。</p>
+        <button id="fetchBtn" disabled>2. データを取得して蓄積する</button>
+        <p>現在のブラウザ蓄積データ件数: <span id="recordCount" style="font-weight: bold; color: #2980b9;">0</span> 行</p>
+    </div>
+
+    <div class="card">
+        <h1>保存 ＆ リセット</h1>
+        <p class="info-text">2週間分の蓄積が完了したら、1つのCSVとして保存し、デバイス側のメモリをクリアします。</p>
+        <button id="saveCsvBtn" class="success" disabled>3. 全データを1つのCSVとして保存</button>
+        <button id="clearDeviceBtn" class="danger" disabled>4. デバイス側のログをクリア</button>
+    </div>
+
+    <div class="card">
+        <h1>ログ出力モニター</h1>
+        <pre id="logOutput">アプリケーションが起動しました。デバイスに接続してください。</pre>
+    </div>
+
+    <script>
+        // Nordic UART Service UUIDs
+        const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const CHARACTERISTIC_UUID_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+        const CHARACTERISTIC_UUID_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+        let bluetoothDevice = null;
+        let rxCharacteristic = null;
+        let txCharacteristic = null;
+        let incomingDataBuffer = "";
+        
+        // ブラウザ側に蓄積するデータ（配列）
+        let accumulatedLogs = [];
+
+        const connectBtn = document.getElementById('connectBtn');
+        const fetchBtn = document.getElementById('fetchBtn');
+        const saveCsvBtn = document.getElementById('saveCsvBtn');
+        const clearDeviceBtn = document.getElementById('clearDeviceBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const logOutput = document.getElementById('logOutput');
+        const recordCount = document.getElementById('recordCount');
+
+        function appendLog(message) {
+            logOutput.textContent += "\n" + message;
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        // 1. 接続 ＆ 時刻同期
+        connectBtn.addEventListener('click', async () => {
+            try {
+                appendLog("BLEデバイスをスキャン中...");
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: "EnvLog" }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                const server = await bluetoothDevice.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                
+                rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
+                txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
+
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    const chunk = new TextDecoder('utf-8').decode(event.target.value);
+                    incomingDataBuffer += chunk;
+                });
+
+                connectionStatus.textContent = "接続中";
+                connectionStatus.className = "status connected";
+                connectBtn.textContent = "接続済み";
+                connectBtn.disabled = true;
+                fetchBtn.disabled = false;
+                saveCsvBtn.disabled = accumulatedLogs.length === 0 ? true : false;
+                clearDeviceBtn.disabled = false;
+
+                appendLog("デバイスとの接続に成功しました！");
+
+                // 【時刻同期の送信】
+                const now = new Date();
+                const timeArray = JSON.stringify([
+                    now.getFullYear(),
+                    now.getMonth() + 1,
+                    now.getDate(),
+                    now.getHours(),
+                    now.getMinutes(),
+                    now.getSeconds()
+                ]);
+                
+                await rxCharacteristic.writeValue(new TextEncoder().encode("TIME:" + timeArray + "\n"));
+                appendLog("PCの現在時刻をデバイスに同期しました: " + now.toLocaleString());
+
+                bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+                    connectionStatus.textContent = "未接続";
+                    connectionStatus.className = "status disconnected";
+                    connectBtn.textContent = "1. デバイスに接続 ＆ 時刻同期";
+                    connectBtn.disabled = false;
+                    fetchBtn.disabled = true;
+                    appendLog("BLEデバイスが切断されました。");
+                });
+
+            } catch (error) {
+                console.error(error);
+                appendLog("接続エラー: " + error);
+            }
+        });
+
+        // 2. データ取得して蓄積
+        fetchBtn.addEventListener('click', async () => {
+            try {
+                incomingDataBuffer = "";
+                appendLog("デバイスからログを取得中...");
+                
+                await rxCharacteristic.writeValue(new TextEncoder().encode("GET_LOG\n"));
+
+                // データ受信を待つ（3秒）
+                setTimeout(() => {
+                    if (!incomingDataBuffer.trim()) {
+                        appendLog("データが受信できませんでした（またはログが空です）。");
+                        return;
+                    }
+
+                    const lines = incomingDataBuffer.trim().split('\n');
+                    let newCount = 0;
+
+                    lines.forEach((line, index) => {
+                        // ヘッダー行("timestamp,temperature,humidity")はスキップ、または最初だけ保持
+                        if (line.startsWith("timestamp") && accumulatedLogs.length > 0) return;
+                        
+                        if (accumulatedLogs.length === 0 || !accumulatedLogs.includes(line)) {
+                            accumulatedLogs.push(line);
+                            newCount++;
+                        }
+                    });
+
+                    recordCount.textContent = accumulatedLogs.length > 0 ? accumulatedLogs.length - 1 : 0; // ヘッダー分除く
+                    saveCsvBtn.disabled = false;
+                    appendLog(`データ受信成功！ 新規 ${newCount} 件を追加しました（累計蓄積: ${recordCount.textContent} 件）`);
+                }, 3000);
+
+            } catch (error) {
+                console.error(error);
+                appendLog("データ取得エラー: " + error);
+            }
+        });
+
+        // 3. 全データを1つのCSVとして保存
+        saveCsvBtn.addEventListener('click', () => {
+            if (accumulatedLogs.length === 0) {
+                alert("保存するデータがありません。");
+                return;
+            }
+
+            // CSVデータを作成
+            const csvContent = accumulatedLogs.join("\n");
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `environment_log_2weeks_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            
+            appendLog("蓄積された全データを1つのCSVファイルとしてダウンロードしました！");
+        });
+
+        // 4. デバイス側のログをクリア
+        clearDeviceBtn.addEventListener('click', async () => {
+            if (!confirm("デバイス側のメモリをクリアしますか？\n(※必ず先にCSV保存を行ってからクリアしてください)")) {
+                return;
+            }
+            try {
+                incomingDataBuffer = "";
+                appendLog("デバイス側のデータクリアを要求中...");
+                await rxCharacteristic.writeValue(new TextEncoder().encode("CLEAR_LOG\n"));
+                
+                setTimeout(() => {
+                    appendLog("デバイス側のメモリがクリアされました。");
+                }, 1000);
+            } catch (error) {
+                console.error(error);
+                appendLog("クリアコマンド送信エラー: " + error);
+            }
+        });
+    </script>
+</body>
+</html>
