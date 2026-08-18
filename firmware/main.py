@@ -23,6 +23,9 @@ rtc = RTC()
 # RAM上のログバッファ（ここに1時間ごとのデータを蓄積）
 log_buffer = []
 
+# BLE経由でRTCが同期されるまではログを蓄積しない
+rtc_synced = False
+
 # BLEデバイス名（BLEUARTServer初期化後にセットされる）
 ble_device_name = ""
 
@@ -61,9 +64,11 @@ def get_formatted_time():
     t = rtc.datetime()
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[4], t[5], t[6])
 
-def update_oled(temp, humid, soil, light, status_msg="Running"):
+def update_oled(temp, humid, soil, light, status_msg=None):
     if not display:
         return
+    if status_msg is None:
+        status_msg = "Running" if rtc_synced else "No RTC!"
     display.fill(0)
     
     # 画面表示のレイアウト
@@ -74,6 +79,7 @@ def update_oled(temp, humid, soil, light, status_msg="Running"):
     display.text(f"Humid: {humid:.1f} %", 0, dy*3, 1)
     display.text(f"Soil : {soil}", 0, dy*4, 1)
     display.text(f"light: {light}", 0, dy*5, 1)
+    display.text(f"Log:{len(log_buffer)} {status_msg}", 0, dy*6, 1)
     
     display.show()
 
@@ -105,6 +111,8 @@ class BLEUARTServer:
         
         SERVICES = (TRANSPORT_SERVICE,)
         ((self._rx_handle, self._tx_handle),) = self._ble.gatts_register_services(SERVICES)
+        # デフォルトの受信バッファ(約20バイト)だとTIME:コマンドが途中で切れるため拡張する
+        self._ble.gatts_set_buffer(self._rx_handle, 200, False)
         
         self._conn_handle = None
         self._name = name
@@ -167,12 +175,16 @@ class BLEUARTServer:
             try:
                 import json
                 time_arr = json.loads(cmd[5:])
+                if len(time_arr) < 6:
+                    raise ValueError("time_arr too short: {}".format(time_arr))
                 # (年, 月, 日, 曜日(0-6), 時, 分, 秒, サブ秒)
                 # MicroPythonの曜日計算はざっくりでOKなので0を入れる
                 rtc.datetime((time_arr[0], time_arr[1], time_arr[2], 0, time_arr[3], time_arr[4], time_arr[5], 0))
+                global rtc_synced
+                rtc_synced = True
                 print("[INFO] 時刻を同期しました:", get_formatted_time())
             except Exception as e:
-                print("[ERROR] 時刻同期失敗:", e)
+                print("[ERROR] 時刻同期失敗:", e, "受信文字列:", cmd)
                 
         elif cmd == "GET_LOG":
             # ログデータ一括送信
@@ -192,6 +204,8 @@ class BLEUARTServer:
             log_buffer.clear()
             print("[INFO] RAM上のログをクリアしました")
             self.send("OK_CLEARED\n")
+            temp, humid, soil, light = read_sensor()
+            update_oled(temp, humid, soil, light, "Cleared!")
 
 # ==========================================
 # 3. メインループ
@@ -215,12 +229,15 @@ def main():
             temp, humid, soil, light = read_sensor()
             timestamp = get_formatted_time()
             
-            # RAMに蓄積
-            row = f"{timestamp},{temp},{humid},{soil},{light},{ble_device_name}\n"
-            log_buffer.append(row)
+            if rtc_synced:
+                # RAMに蓄積（RTCが未同期の間は不正な時刻になるため蓄積しない）
+                row = f"{timestamp},{temp},{humid},{soil},{light},{ble_device_name}\n"
+                log_buffer.append(row)
+                print(f"[計測] {timestamp} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件)")
+            else:
+                print("[INFO] RTC未同期のため蓄積をスキップしました")
             
             last_measure_tick = current_tick
-            print(f"[計測] {timestamp} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件)")
             
         # OLEDの画面更新（毎秒）
         temp, humid, soil, light = read_sensor()
