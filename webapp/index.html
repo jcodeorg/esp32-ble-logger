@@ -28,6 +28,7 @@
         <p class="info-text">ChromebookからBluetooth経由でデバイスに接続し、時刻同期やログの回収・蓄積を行います。</p>
         <p>接続状態: <span id="connectionStatus" class="status disconnected">未接続</span></p>
         <button id="connectBtn">1. デバイスに接続 ＆ 時刻同期</button>
+        <button id="disconnectBtn" class="danger" disabled>接続を解除</button>
     </div>
 
     <div class="card">
@@ -64,6 +65,7 @@
         let accumulatedLogs = [];
 
         const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
         const fetchBtn = document.getElementById('fetchBtn');
         const saveCsvBtn = document.getElementById('saveCsvBtn');
         const clearDeviceBtn = document.getElementById('clearDeviceBtn');
@@ -112,6 +114,7 @@
                 connectionStatus.className = "status connected";
                 connectBtn.textContent = "接続済み";
                 connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
                 fetchBtn.disabled = false;
                 saveCsvBtn.disabled = accumulatedLogs.length === 0 ? true : false;
                 clearDeviceBtn.disabled = false;
@@ -137,6 +140,7 @@
                     connectionStatus.className = "status disconnected";
                     connectBtn.textContent = "1. デバイスに接続 ＆ 時刻同期";
                     connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
                     fetchBtn.disabled = true;
                     appendLog("BLEデバイスが切断されました。");
                 });
@@ -144,6 +148,14 @@
             } catch (error) {
                 console.error(error);
                 appendLog("接続エラー: " + error);
+            }
+        });
+
+        // 接続を解除
+        disconnectBtn.addEventListener('click', () => {
+            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                bluetoothDevice.gatt.disconnect();
+                appendLog("BLE接続を手動で解除しました。");
             }
         });
 

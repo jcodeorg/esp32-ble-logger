@@ -26,6 +26,9 @@ log_buffer = []
 # BLE経由でRTCが同期されるまではログを蓄積しない
 rtc_synced = False
 
+# BLE中央側（ブラウザ）が現在接続中か
+ble_connected = False
+
 # BLEデバイス名（BLEUARTServer初期化後にセットされる）
 ble_device_name = ""
 
@@ -73,9 +76,12 @@ def update_oled(temp, humid, soil, light, status_msg=None):
     
     # 画面表示のレイアウト
     dy = 9
-    # デバイス名は反転表示にして、ブラウザの選択画面と見比べやすくする
-    display.fill_rect(0, dy*0, 128, dy, 1)
-    display.text(f"{ble_device_name}", 0, dy*0, 0)
+    # 接続中はデバイス名を反転表示、切断中は通常表示
+    if ble_connected:
+        display.fill_rect(0, dy*0, 128, dy, 1)
+        display.text(f"{ble_device_name}", 0, dy*0, 0)
+    else:
+        display.text(f"{ble_device_name}", 0, dy*0, 1)
     display.text(f"Time : {get_formatted_time().split()[1]}", 0, dy*1, 1)
     display.text(f"Temp : {temp:.1f} C", 0, dy*2, 1)
     display.text(f"Humid: {humid:.1f} %", 0, dy*3, 1)
@@ -147,11 +153,14 @@ class BLEUARTServer:
         return "".join(name)
 
     def _irq(self, event, data):
+        global ble_connected
         if event == 1: # 接続
             self._conn_handle, _, _ = data
+            ble_connected = True
             print("[BLE] 接続されました")
         elif event == 2: # 切断
             self._conn_handle = None
+            ble_connected = False
             print("[BLE] 切断されました")
             self._advertise(self._name)
         elif event == 3: # データ受信 (Chromebookからの書き込み)
