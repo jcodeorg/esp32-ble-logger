@@ -40,7 +40,7 @@ esp32-ble-logger/
 ├── firmware/               # MicroPython（ESP32側）のプログラム
 │   ├── boot.py             # 起動時の初期設定
 │   └── main.py             # メイン処理（計測・BLE・データ管理）
-└── webapp/                 # Chromebook（ブラウザ側）のプログラム
+└── docs/                   # Chromebook（ブラウザ側）のプログラム
     └── index.html          # Web Bluetooth用 UIページ（データ蓄積機能付き）
 
 ```
