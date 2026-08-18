@@ -27,7 +27,7 @@ log_buffer = []
 ble_device_name = ""
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
-MEASURE_INTERVAL = 3600 
+MEASURE_INTERVAL = 3 # 3600 
 last_measure_tick = 0
 
 
@@ -48,31 +48,32 @@ def read_sensor():
     try:
         aht20 = AHT20(i2c)
         temp = round(aht20.temperature, 1)
-        humi = round(aht20.relative_humidity, 1)
+        humid = round(aht20.relative_humidity, 1)
     except Exception as e:
         print("AHT20 error:", e)
         temp = 0.0
-        humi = 0.0
+        humid = 0.0
     soil = adc_soil.read()
-    ligh = adc_cds.read()
-    return temp, humi, soil, ligh
+    light = adc_cds.read()
+    return temp, humid, soil, light
 
 def get_formatted_time():
     t = rtc.datetime()
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[4], t[5], t[6])
 
-def update_oled(temp, hum, soil, ligh, status_msg="Running"):
+def update_oled(temp, humid, soil, light, status_msg="Running"):
     if not display:
         return
     display.fill(0)
     
     # 画面表示のレイアウト
-    display.text(f"BLE: {ble_device_name}", 0, 0, 1)
-    display.text(f"Time: {get_formatted_time().split()[1]}", 0, 11, 1)
-    display.text(f"Temp: {temp:.1f} C", 0, 22, 1)
-    display.text(f"Hum : {hum:.1f} %", 0, 33, 1)
-    display.text(f"Soil: {soil}", 0, 44, 1)
-    display.text(f"Ligh: {ligh}", 0, 55, 1)
+    dy = 9
+    display.text(f"{ble_device_name}", 0, dy*0, 1)
+    display.text(f"Time : {get_formatted_time().split()[1]}", 0, dy*1, 1)
+    display.text(f"Temp : {temp:.1f} C", 0, dy*2, 1)
+    display.text(f"Humid: {humid:.1f} %", 0, dy*3, 1)
+    display.text(f"Soil : {soil}", 0, dy*4, 1)
+    display.text(f"light: {light}", 0, dy*5, 1)
     
     display.show()
 
@@ -203,26 +204,27 @@ def main():
     ble_device_name = ble_server._name
     
     # 起動直後の初期値取得
-    temp, hum, soil, ligh = read_sensor()
-    update_oled(temp, hum, soil, ligh, "Started")
+    temp, humid, soil, light = read_sensor()
+    update_oled(temp, humid, soil, light, "Started")
     
     while True:
         current_tick = time.time()
         
         # 1時間（MEASURE_INTERVAL）ごとの計測
         if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
-            temp, hum, soil, ligh = read_sensor()
+            temp, humid, soil, light = read_sensor()
             timestamp = get_formatted_time()
             
             # RAMに蓄積
-            row = f"{timestamp},{temp},{hum}\n"
+            row = f"{timestamp},{temp},{humid},{soil},{light},{ble_device_name}\n"
             log_buffer.append(row)
             
             last_measure_tick = current_tick
-            print(f"[計測] {timestamp} - Temp: {temp}C, Hum: {hum}% (累計: {len(log_buffer)}件)")
+            print(f"[計測] {timestamp} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件)")
             
         # OLEDの画面更新（毎秒）
-        update_oled(temp, hum, soil, ligh)
+        temp, humid, soil, light = read_sensor()
+        update_oled(temp, humid, soil, light)
         time.sleep(1)
 
 if __name__ == "__main__":
