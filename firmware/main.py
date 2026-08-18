@@ -73,7 +73,9 @@ def update_oled(temp, humid, soil, light, status_msg=None):
     
     # 画面表示のレイアウト
     dy = 9
-    display.text(f"{ble_device_name}", 0, dy*0, 1)
+    # デバイス名は反転表示にして、ブラウザの選択画面と見比べやすくする
+    display.fill_rect(0, dy*0, 128, dy, 1)
+    display.text(f"{ble_device_name}", 0, dy*0, 0)
     display.text(f"Time : {get_formatted_time().split()[1]}", 0, dy*1, 1)
     display.text(f"Temp : {temp:.1f} C", 0, dy*2, 1)
     display.text(f"Humid: {humid:.1f} %", 0, dy*3, 1)

@@ -85,6 +85,17 @@
                     optionalServices: [SERVICE_UUID]
                 });
 
+                // 教室で一斉接続する際に他人のデバイスを誤って選ばないよう、名前を目視確認させる
+                const deviceName = bluetoothDevice.name || "(不明な名前)";
+                const confirmed = confirm(
+                    `選択したデバイス名: 「${deviceName}」\n\nこの名前は、あなたのESP32本体の画面(OLED)の一番上に表示されている名前と一致していますか？\n\n一致していない場合は「キャンセル」を押して、正しいデバイスを選び直してください。`
+                );
+                if (!confirmed) {
+                    appendLog(`接続を中止しました（選択されたデバイス: ${deviceName}）。ご自身のデバイス画面の名前と同じものを選び直してください。`);
+                    bluetoothDevice = null;
+                    return;
+                }
+
                 const server = await bluetoothDevice.gatt.connect();
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 
