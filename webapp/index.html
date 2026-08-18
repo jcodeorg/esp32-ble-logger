@@ -41,7 +41,7 @@
 
     <div class="card">
         <h1>リセット</h1>
-        <p class="info-text">CSV保存は下の「デバイス別データ管理」から行えます。保存完了後は以下でデバイス側のメモリをクリアしてください。</p>
+        <p class="info-text">デバイス側に不要なデータ（ゴミデータなど）が残っていて、取得したくない場合は、このボタンで削除できます。</p>
         <button id="clearDeviceBtn" class="danger" disabled>3. デバイス側のログをクリア</button>
     </div>
 
@@ -146,7 +146,7 @@
             if (btn.dataset.action === 'export') {
                 exportDeviceCsv(name);
             } else if (btn.dataset.action === 'delete') {
-                if (confirm(`「${name}」のブラウザ上の蓄積データを削除しますか？（デバイス本体のデータには影響しません）`)) {
+                if (confirm(`「${name}」のブラウザ上の蓄積データを削除しますか？\n（※削除する前に CSV保存 をしてください。デバイス本体のデータには影響しません）`)) {
                     delete deviceLogs[name];
                     saveDeviceLogs();
                     refreshDeviceUI();
@@ -298,20 +298,30 @@
 
         // 3. デバイス側のログをクリア
         clearDeviceBtn.addEventListener('click', async () => {
-            if (!confirm("デバイス側のメモリをクリアしますか？\n(※必ず先にCSV保存を行ってからクリアしてください)")) {
+            if (!confirm("デバイス側のデータをクリアしますか？")) {
                 return;
             }
+            // 応答が無い場合に押しっぱなし状態にならないよう、必ず解除する
+            clearDeviceBtn.disabled = true;
+            const originalLabel = clearDeviceBtn.textContent;
+            clearDeviceBtn.textContent = "クリア中...";
             try {
                 incomingDataBuffer = "";
                 appendLog("デバイス側のデータクリアを要求中...");
-                await rxCharacteristic.writeValue(new TextEncoder().encode("CLEAR_LOG\n"));
-                
-                setTimeout(() => {
-                    appendLog("デバイス側のメモリがクリアされました。");
-                }, 1000);
+
+                const writePromise = rxCharacteristic.writeValue(new TextEncoder().encode("CLEAR_LOG\n"));
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("応答タイムアウト（5秒）")), 5000)
+                );
+                await Promise.race([writePromise, timeoutPromise]);
+
+                appendLog("デバイス側のメモリがクリアされました。");
             } catch (error) {
                 console.error(error);
                 appendLog("クリアコマンド送信エラー: " + error);
+            } finally {
+                clearDeviceBtn.disabled = false;
+                clearDeviceBtn.textContent = originalLabel;
             }
         });
     </script>

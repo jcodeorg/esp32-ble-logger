@@ -8,6 +8,11 @@ from ahtx0 import AHT20
 # ==========================================
 # 1. 設定・初期化
 # ==========================================
+
+# 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
+MEASURE_INTERVAL = 3 # 3600 
+last_measure_tick = 0
+
 # I2Cピンの定義（お使いのボードに合わせてSCL/SDAを変更してください。例: SCL=23, SDA=22）
 i2c = SoftI2C(scl=Pin(23), sda=Pin(22))
 
@@ -29,13 +34,12 @@ rtc_synced = False
 # BLE中央側（ブラウザ）が現在接続中か
 ble_connected = False
 
+# OLEDに一時的に表示するメッセージ（BLE割り込み内ではI2Cセンサーを右接阀しないため、メインループで反映する）
+oled_flash_msg = None
+oled_flash_until = 0
+
 # BLEデバイス名（BLEUARTServer初期化後にセットされる）
 ble_device_name = ""
-
-# 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
-MEASURE_INTERVAL = 3 # 3600 
-last_measure_tick = 0
-
 
 # A1: 土壌水分センサ用 ADC を初期化する
 adc_soil = ADC(Pin(1, Pin.IN))
@@ -178,45 +182,47 @@ class BLEUARTServer:
         self._ble.gap_advertise(100, adv_data)
 
     def handle_command(self, cmd):
-        global log_buffer
+        global log_buffer, rtc_synced, oled_flash_msg, oled_flash_until
         print(f"[CMD 受信] {cmd}")
         
-        if cmd.startswith("TIME:"):
-            # 時刻同期コマンド: TIME:[2026,8,17,10,30,0]
-            try:
-                import json
-                time_arr = json.loads(cmd[5:])
-                if len(time_arr) < 6:
-                    raise ValueError("time_arr too short: {}".format(time_arr))
-                # (年, 月, 日, 曜日(0-6), 時, 分, 秒, サブ秒)
-                # MicroPythonの曜日計算はざっくりでOKなので0を入れる
-                rtc.datetime((time_arr[0], time_arr[1], time_arr[2], 0, time_arr[3], time_arr[4], time_arr[5], 0))
-                global rtc_synced
-                rtc_synced = True
-                print("[INFO] 時刻を同期しました:", get_formatted_time())
-            except Exception as e:
-                print("[ERROR] 時刻同期失敗:", e, "受信文字列:", cmd)
+        try:
+            if cmd.startswith("TIME:"):
+                # 時刻同期コマンド: TIME:[2026,8,17,10,30,0]
+                try:
+                    import json
+                    time_arr = json.loads(cmd[5:])
+                    if len(time_arr) < 6:
+                        raise ValueError("time_arr too short: {}".format(time_arr))
+                    # (年, 月, 日, 曜日(0-6), 時, 分, 秒, サブ秒)
+                    # MicroPythonの曜日計算はざっくりでOKなので0を入れる
+                    rtc.datetime((time_arr[0], time_arr[1], time_arr[2], 0, time_arr[3], time_arr[4], time_arr[5], 0))
+                    rtc_synced = True
+                    print("[INFO] 時刻を同期しました:", get_formatted_time())
+                except Exception as e:
+                    print("[ERROR] 時刻同期失敗:", e, "受信文字列:", cmd)
+                    
+            elif cmd == "GET_LOG":
+                # ログデータ一括送信
+                print("[INFO] ログデータを送信します...")
+                # CSVヘッダーとデータをまとめて送信
+                header = "timestamp,temperature,humidity\n"
+                self.send(header)
+                time.sleep(0.1)
                 
-        elif cmd == "GET_LOG":
-            # ログデータ一括送信
-            print("[INFO] ログデータを送信します...")
-            # CSVヘッダーとデータをまとめて送信
-            header = "timestamp,temperature,humidity\n"
-            self.send(header)
-            time.sleep(0.1)
-            
-            for row in log_buffer:
-                self.send(row)
-                time.sleep(0.05) # パケットあふれ防止のウェイト
-            print("[INFO] 送信完了")
-            
-        elif cmd == "CLEAR_LOG":
-            # データクリアコマンド
-            log_buffer.clear()
-            print("[INFO] RAM上のログをクリアしました")
-            self.send("OK_CLEARED\n")
-            temp, humid, soil, light = read_sensor()
-            update_oled(temp, humid, soil, light, "Cleared!")
+                for row in log_buffer:
+                    self.send(row)
+                    time.sleep(0.05) # パケットあふれ防止のウェイト
+                print("[INFO] 送信完了")
+                
+            elif cmd == "CLEAR_LOG":
+                # データクリアコマンド（I2Cセンサー読み取りなどの重い処理はBLE割り込み内では行わない）
+                log_buffer.clear()
+                print("[INFO] RAM上のログをクリアしました")
+                self.send("OK_CLEARED\n")
+                oled_flash_msg = "Cleared!"
+                oled_flash_until = time.time() + 2
+        except Exception as e:
+            print("[ERROR] コマンド処理中に例外発生:", e)
 
 # ==========================================
 # 3. メインループ
@@ -252,7 +258,8 @@ def main():
             
         # OLEDの画面更新（毎秒）
         temp, humid, soil, light = read_sensor()
-        update_oled(temp, humid, soil, light)
+        flash = oled_flash_msg if oled_flash_msg and time.time() < oled_flash_until else None
+        update_oled(temp, humid, soil, light, flash)
         time.sleep(1)
 
 if __name__ == "__main__":
