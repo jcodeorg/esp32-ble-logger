@@ -90,10 +90,10 @@ class BLEUARTServer:
             mac = self._ble.config('mac')[1]  # 6バイトのMACアドレス
             name = "EnvLog-" + self.get_friendly_name(mac)
 
-        # Nordic UART Service の UUID
+        # Nordic UART Service の UUID（RX=書き込み用, TX=通知用。ブラウザ側と合わせる）
         self.UART_UUID = bluetooth.UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
-        self.TX_UUID = bluetooth.UUID("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
-        self.RX_UUID = bluetooth.UUID("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+        self.RX_UUID = bluetooth.UUID("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
+        self.TX_UUID = bluetooth.UUID("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         
         TRANSPORT_SERVICE = (
             self.UART_UUID,
@@ -104,7 +104,7 @@ class BLEUARTServer:
         )
         
         SERVICES = (TRANSPORT_SERVICE,)
-        ((self._tx_handle, self._rx_handle),) = self._ble.gatts_register_services(SERVICES)
+        ((self._rx_handle, self._tx_handle),) = self._ble.gatts_register_services(SERVICES)
         
         self._conn_handle = None
         self._name = name
