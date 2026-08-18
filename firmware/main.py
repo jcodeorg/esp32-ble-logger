@@ -1,8 +1,9 @@
 import time
 import struct
 import bluetooth
-from machine import Pin, SoftI2C, RTC
+from machine import Pin, SoftI2C, RTC, ADC
 import ssd1306  # OLEDディスプレイ用（I2C用）
+from ahtx0 import AHT20
 
 # ==========================================
 # 1. 設定・初期化
@@ -29,20 +30,38 @@ ble_device_name = ""
 MEASURE_INTERVAL = 3600 
 last_measure_tick = 0
 
+
+# A1: 土壌水分センサ用 ADC を初期化する
+adc_soil = ADC(Pin(1, Pin.IN))
+adc_soil.atten(ADC.ATTN_11DB)   # 0〜3.3V の範囲を読む
+adc_soil.width(ADC.WIDTH_12BIT) # 分解能 12 ビット（0〜4095）
+
+# A2: CdS 照度センサ用 ADC を初期化する
+adc_cds = ADC(Pin(2, Pin.IN))
+adc_cds.atten(ADC.ATTN_11DB)
+adc_cds.width(ADC.WIDTH_12BIT)
+
 # センサーの初期化（ダミー関数。実際のセンサーに合わせて書き換えてください）
 def read_sensor():
-    # 例: BME280やDHT22から取得
-    # temp = bme.read_temperature()
-    # hum = bme.read_humidity()
-    temp = 25.4  # ダミー値
-    humidity = 58.2 # ダミー値
-    return temp, humidity
+    """AHT20センサーから温湿度を取得する"""
+
+    try:
+        aht20 = AHT20(i2c)
+        temp = round(aht20.temperature, 1)
+        humi = round(aht20.relative_humidity, 1)
+    except Exception as e:
+        print("AHT20 error:", e)
+        temp = 0.0
+        humi = 0.0
+    soil = adc_soil.read()
+    ligh = adc_cds.read()
+    return temp, humi, soil, ligh
 
 def get_formatted_time():
     t = rtc.datetime()
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[4], t[5], t[6])
 
-def update_oled(temp, hum, status_msg="Running"):
+def update_oled(temp, hum, soil, ligh, status_msg="Running"):
     if not display:
         return
     display.fill(0)
@@ -52,7 +71,8 @@ def update_oled(temp, hum, status_msg="Running"):
     display.text(f"Time: {get_formatted_time().split()[1]}", 0, 11, 1)
     display.text(f"Temp: {temp:.1f} C", 0, 22, 1)
     display.text(f"Hum : {hum:.1f} %", 0, 33, 1)
-    display.text(f"Logs: {len(log_buffer)} count", 0, 44, 1)
+    display.text(f"Soil: {soil}", 0, 44, 1)
+    display.text(f"Ligh: {ligh}", 0, 55, 1)
     
     display.show()
 
@@ -183,15 +203,15 @@ def main():
     ble_device_name = ble_server._name
     
     # 起動直後の初期値取得
-    temp, hum = read_sensor()
-    update_oled(temp, hum, "Started")
+    temp, hum, soil, ligh = read_sensor()
+    update_oled(temp, hum, soil, ligh, "Started")
     
     while True:
         current_tick = time.time()
         
         # 1時間（MEASURE_INTERVAL）ごとの計測
         if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
-            temp, hum = read_sensor()
+            temp, hum, soil, ligh = read_sensor()
             timestamp = get_formatted_time()
             
             # RAMに蓄積
@@ -202,7 +222,7 @@ def main():
             print(f"[計測] {timestamp} - Temp: {temp}C, Hum: {hum}% (累計: {len(log_buffer)}件)")
             
         # OLEDの画面更新（毎秒）
-        update_oled(temp, hum)
+        update_oled(temp, hum, soil, ligh)
         time.sleep(1)
 
 if __name__ == "__main__":
