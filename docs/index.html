@@ -26,6 +26,7 @@
     <div class="card">
         <h1>ESP32 環境ロガー管理ツール</h1>
         <p class="info-text">ChromebookからBluetooth経由でデバイスに接続し、時刻同期やログの回収・蓄積を行います。</p>
+        <p class="info-text">時刻同期が完了してからデバイスは環境データの収集を開始します。<br>それまでは記録が行われませんので、ご注意ください。</p>
         <p>接続状態: <span id="connectionStatus" class="status disconnected">未接続</span></p>
         <p>現在のデバイス: <span id="currentDeviceLabel" style="font-weight: bold;">(未接続)</span></p>
         <button id="connectBtn">1. デバイスに接続 ＆ 時刻同期</button>
@@ -34,7 +35,7 @@
 
     <div class="card">
         <h1>データ回収 ＆ 蓄積</h1>
-        <p class="info-text">数日おきに「データを取得して蓄積」を押すと、接続中のデバイスごとにブラウザ上へデータが溜まっていきます。</p>
+        <p class="info-text">「データを取得して蓄積」を押すと、接続中のデバイスごとにブラウザ上へデータが溜まっていきます。</p>
         <button id="fetchBtn" disabled>2. データを取得して蓄積する</button>
         <p>現在のデバイスの蓄積データ件数: <span id="recordCount" style="font-weight: bold; color: #2980b9;">0</span> 行</p>
     </div>
@@ -42,7 +43,7 @@
     <div class="card">
         <h1>リセット</h1>
         <p class="info-text">デバイス側に不要なデータ（ゴミデータなど）が残っていて、取得したくない場合は、このボタンで削除できます。</p>
-        <button id="clearDeviceBtn" class="danger" disabled>3. デバイス側のログをクリア</button>
+        <button id="clearDeviceBtn" class="danger" disabled>デバイス側のログをクリア</button>
     </div>
 
     <div class="card">
