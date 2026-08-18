@@ -40,10 +40,9 @@
     </div>
 
     <div class="card">
-        <h1>保存 ＆ リセット</h1>
-        <p class="info-text">2週間分の蓄積が完了したら、接続中のデバイスのデータを1つのCSVとして保存し、デバイス側のメモリをクリアします。</p>
-        <button id="saveCsvBtn" class="success" disabled>3. 現在のデバイスのデータをCSVとして保存</button>
-        <button id="clearDeviceBtn" class="danger" disabled>4. デバイス側のログをクリア</button>
+        <h1>リセット</h1>
+        <p class="info-text">CSV保存は下の「デバイス別データ管理」から行えます。保存完了後は以下でデバイス側のメモリをクリアしてください。</p>
+        <button id="clearDeviceBtn" class="danger" disabled>3. デバイス側のログをクリア</button>
     </div>
 
     <div class="card">
@@ -86,7 +85,6 @@
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
         const fetchBtn = document.getElementById('fetchBtn');
-        const saveCsvBtn = document.getElementById('saveCsvBtn');
         const clearDeviceBtn = document.getElementById('clearDeviceBtn');
         const connectionStatus = document.getElementById('connectionStatus');
         const currentDeviceLabel = document.getElementById('currentDeviceLabel');
@@ -160,7 +158,6 @@
         function refreshDeviceUI() {
             currentDeviceLabel.textContent = currentDeviceName || "(未接続)";
             recordCount.textContent = getCurrentRows().length;
-            saveCsvBtn.disabled = getCurrentRows().length === 0;
             renderDeviceList();
         }
 
@@ -299,16 +296,7 @@
             }
         });
 
-        // 3. 現在のデバイスのデータをCSVとして保存
-        saveCsvBtn.addEventListener('click', () => {
-            if (!currentDeviceName) {
-                alert("デバイスに接続してください。");
-                return;
-            }
-            exportDeviceCsv(currentDeviceName);
-        });
-
-        // 4. デバイス側のログをクリア
+        // 3. デバイス側のログをクリア
         clearDeviceBtn.addEventListener('click', async () => {
             if (!confirm("デバイス側のメモリをクリアしますか？\n(※必ず先にCSV保存を行ってからクリアしてください)")) {
                 return;
