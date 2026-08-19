@@ -116,7 +116,7 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${name}_${new Date().toISOString().slice(0,5)}.csv`;
+            a.download = `${name}_${new Date().toISOString().slice(5,10)}.csv`;
             a.click();
             URL.revokeObjectURL(url);
             appendLog(`「${name}」のデータをCSVファイルとしてダウンロードしました！`);
