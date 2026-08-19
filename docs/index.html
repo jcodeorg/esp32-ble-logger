@@ -110,7 +110,7 @@
                 return;
             }
             // const header = "timestamp,temperature,humidity,soil,light,device\n";
-            const header = "タイムスタンプ,温度,湿度,土壌水分,光,デバイス名\n";
+            const header = "タイムスタンプ,温度,湿度,土壌水分,光量,デバイス名\n";
             const csvContent = header + rows.join("\n");
             const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
             const blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
