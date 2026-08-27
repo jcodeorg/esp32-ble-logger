@@ -157,6 +157,8 @@ class BLEUARTServer:
         
         self._conn_handle = None
         self._name = name
+        # GET_LOGは重い送信処理のためBLE割り込み内では実行せず、フラグを立ててメインループに処理させる
+        self.get_log_requested = False
         self._advertise(name)
 
     def get_friendly_name(self, unique_id):
@@ -261,24 +263,10 @@ class BLEUARTServer:
                     print("[ERROR] 時刻同期失敗:", e, "受信文字列:", cmd)
                     
             elif cmd == "GET_LOG":
-                # ログデータ一括送信
-                print("[INFO] ログデータを送信します...")
-                # CSVヘッダーはアクティブなプロファイルのCSV_FIELDSに合わせて動的に生成する
-                header = "timestamp," + ",".join(CSV_FIELDS) + ",device\n"
-                self.send(header)
-                time.sleep(0.1)
-                
-                for row_index, row in enumerate(log_buffer):
-                    values = ",".join(str(row[key]) for key in CSV_FIELDS)
-                    line = "{},{},{}\n".format(epoch_to_str(row["epoch"]), values, ble_device_name)
-                    self.send(line)
-                    time.sleep(0.05) # パケットあふれ防止のウェイト
-                    # 送信中のGC発生によるタイミング不安定を避けるため、定期的にメモリを回収して断片化を抑える
-                    if row_index % 20 == 0:
-                        gc.collect()
-                # ブラウザ側が固定タイムアウトではなく完了を検知できるようにマーカーを送る
-                self.send("END_LOG\n")
-                print("[INFO] 送信完了")
+                # 重い送信ループはBLE割り込み内で実行しない（BLEスタック自体をブロックしENOMEMが固定化するため）
+                # フラグを立てるだけにとどめ、実際の送信はメインループの process_pending() で行う
+                self.get_log_requested = True
+                print("[INFO] GET_LOGを受け付けました。メインループで送信します")
                 
             elif cmd == "CLEAR_LOG":
                 # データクリアコマンド（I2Cセンサー読み取りなどの重い処理はBLE割り込み内では行わない）
@@ -289,6 +277,38 @@ class BLEUARTServer:
                 oled_flash_until = time.time() + 2
         except Exception as e:
             print("[ERROR] コマンド処理中に例外発生:", e)
+
+    def send_log_data(self):
+        """GET_LOGの実際の送信処理。重いループなので必ずメインループから呼ぶこと（BLE割り込み内では呼ばない）"""
+        print("[INFO] ログデータを送信します...")
+        try:
+            # CSVヘッダーはアクティブなプロファイルのCSV_FIELDSに合わせて動的に生成する
+            header = "timestamp," + ",".join(CSV_FIELDS) + ",device\n"
+            self.send(header)
+            time.sleep(0.1)
+
+            for row_index, row in enumerate(log_buffer):
+                values = ",".join(str(row[key]) for key in CSV_FIELDS)
+                line = "{},{},{}\n".format(epoch_to_str(row["epoch"]), values, ble_device_name)
+                self.send(line)
+                time.sleep(0.05) # パケットあふれ防止のウェイト
+                # 送信中のGC発生によるタイミング不安定を避けるため、定期的にメモリを回収して断片化を抑える
+                if row_index % 20 == 0:
+                    gc.collect()
+                    # 送信件数が多いとこのループだけでWDTタイムアウトを超えるため、ここでもfeedする
+                    if wdt:
+                        wdt.feed()
+            # ブラウザ側が固定タイムアウトではなく完了を検知できるようにマーカーを送る
+            self.send("END_LOG\n")
+            print("[INFO] 送信完了")
+        except Exception as e:
+            print("[ERROR] ログ送信中に例外発生:", e)
+
+    def process_pending(self):
+        """BLE割り込みで立てられたフラグをメインループから処理する"""
+        if self.get_log_requested:
+            self.get_log_requested = False
+            self.send_log_data()
 
 # ==========================================
 # 3. メインループ
@@ -326,6 +346,12 @@ def main():
             wdt.feed()
 
         current_tick = time.time()
+
+        # BLE割り込みで受け付けたリクエスト（GET_LOGなど）をここで処理する
+        try:
+            ble_server.process_pending()
+        except Exception as e:
+            print("[ERROR] 保留中のBLEリクエスト処理中に例外発生:", e)
 
         # アクチュエータのタイマー制御（毎秒。失敗してもループ自体は継続する）
         try:
