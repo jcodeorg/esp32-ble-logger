@@ -1,5 +1,5 @@
 """
-デバイスプロファイル: 温湿度(AHT20) + 土壌水分 + 照度センサー(BH1750) + 水中ポンプ + LED タイマー制御構成
+デバイス構成: 温湿度(AHT20) + 土壌水分 + 照度センサー(BH1750) + 水中ポンプ + LED タイマー制御構成
 （ポンプ・LEDの状態はCSV出力の対象外。read_sensor()が返すのはセンサー値のみ）
 
 main.py から呼ばれる共通インターフェース:
@@ -170,4 +170,3 @@ def tick_actuators(now_epoch):
         if led_should_be_on != bool(_led_state):
             _led_state = 1 if led_should_be_on else 0
             _led_pin.value(_led_state)
-

@@ -16,12 +16,12 @@ import ssd1306  # OLEDディスプレイ用（I2C用）
 ACTIVE_PROFILE = "pump_led"
 
 if ACTIVE_PROFILE == "pump_led":
-    from profiles.profile_pump_led import (
+    from sensors_actuators import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
         update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
     )
 else:
-    from profiles.profile_soil_cds import (
+    from sensors import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
         update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
     )
@@ -33,10 +33,10 @@ last_measure_tick = 0
 # RAM上に保持するログの上限件数（超過分は古い方から破棄してメモリ枯渇を防ぐ）
 MAX_LOG_ENTRIES = 5000
 
-# ウォッチドッグタイマー: この秒数以内にfeed()されないとデバイスを自動リセットする
+# ウォッチドッグタイマー: この5分以内にfeed()されないとデバイスを自動リセットする
 # ESP32のWDTは一度起動すると停止できないため、このフラグファイルがある間はThonnyでの
 # メンテナンス作業がリセットで妨げられないよう、起動をスキップする
-WDT_TIMEOUT_MS = 15000
+WDT_TIMEOUT_MS = 300000
 MAINTENANCE_FLAG_FILE = "maintenance.flag"
 
 def _is_maintenance_mode():

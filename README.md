@@ -40,13 +40,12 @@ esp32-ble-logger/
 ├── firmware/               # MicroPython（ESP32側）のプログラム
 │   ├── boot.py             # 起動時の初期設定
 │   ├── main.py             # メイン処理（計測・BLE・データ管理。デバイス構成は共通）
-│   ├── lib/                # センサー等の共通ドライバ
-│   │   ├── ahtx0.py        # 温湿度センサー(AHT20)
-│   │   ├── ssd1306.py      # OLEDディスプレイ
-│   │   └── bh1750.py       # 照度センサー(BH1750)
-│   └── profiles/           # デバイス構成ごとのセンサー・アクチュエータ実装
-│       ├── profile_soil_cds.py   # 標準構成: 土壌水分センサー + CdS照度センサー
-│       └── profile_pump_led.py   # 別構成: 照度センサー(BH1750) + 水中ポンプ + LEDタイマー制御
+│   ├── sensors.py          # 標準構成: 土壌水分センサー + CdS照度センサー
+│   ├── sensors_actuators.py # 別構成: 照度センサー(BH1750) + 水中ポンプ + LEDタイマー制御
+│   └── lib/                # センサー等の共通ドライバ
+│       ├── ahtx0.py        # 温湿度センサー(AHT20)
+│       ├── ssd1306.py      # OLEDディスプレイ
+│       └── bh1750.py       # 照度センサー(BH1750)
 └── docs/                   # Chromebook（ブラウザ側）のプログラム
     └── index.html          # Web Bluetooth用 UIページ（データ蓄積機能付き）
 
@@ -59,9 +58,9 @@ esp32-ble-logger/
 このプロジェクトは、センサー・アクチュエータ構成が異なる複数のデバイスを、共通の基盤（BLE通信・データ蓄積・時刻同期・WDTなど）を再利用しながら管理できるように設計されています。
 
 * `firmware/main.py` はBLE通信・ログ蓄積・OLED表示・WDTなど全デバイス共通のロジックのみを持ちます。
-* センサーの読み取りやアクチュエータの制御など、デバイス固有の処理は `firmware/profiles/` 以下の**プロファイル**として分離されています。
+* センサーの読み取りやアクチュエータの制御など、デバイス固有の処理は `firmware/sensors.py`（標準構成）または `firmware/sensors_actuators.py`（ポンプ・LED構成）に分離されています。
 * `main.py` 冒頭の `ACTIVE_PROFILE` 変数（`"soil_cds"` または `"pump_led"`）を書き込み対象のハードウェアに合わせて切り替えるだけで、同じ `main.py` を両方の構成で使い回せます。
-* 各プロファイルは次の共通インターフェースを実装します。
+* 各ファイルは次の共通インターフェースを実装します。
 
   | 関数/変数 | 役割 |
   |---|---|
@@ -72,7 +71,7 @@ esp32-ble-logger/
   | `init_actuators()` | アクチュエータの初期化（起動時に1回。アクチュエータが無ければ何もしない） |
   | `tick_actuators(now_epoch)` | アクチュエータのタイマー制御（メインループから毎秒呼ばれる） |
 
-* 新しいデバイス構成を追加したい場合は、`firmware/profiles/` に上記インターフェースを満たす新しいプロファイルファイルを追加し、`main.py` の `ACTIVE_PROFILE` 判定に分岐を足すだけで対応できます。
+* 新しいデバイス構成を追加したい場合は、`firmware/` に上記インターフェースを満たす新しいファイル（例: `sensors_xxx.py`）を追加し、`main.py` の `ACTIVE_PROFILE` 判定に分岐を足すだけで対応できます。
 
 ---
 
@@ -101,7 +100,7 @@ esp32-ble-logger/
 ### 1. デバイス側（ESP32）の準備
 
 1. ESP32に MicroPython のファームウェアを書き込みます。
-2. `firmware/` 内の `boot.py`、`main.py`、`lib/` フォルダ、`profiles/` フォルダをすべて ESP32にアップロードします（Thonny IDE などの使用が便利です）。
+2. `firmware/` 内の `boot.py`、`main.py`、`sensors.py`、`sensors_actuators.py`、`lib/` フォルダをすべて ESP32にアップロードします（Thonny IDE などの使用が便利です）。
 3. `main.py` 冒頭の `ACTIVE_PROFILE` を、実際に搭載したセンサー・アクチュエータ構成（`"soil_cds"` または `"pump_led"`）に合わせて設定してから書き込みます。
 4. 電源を入れると、1時間ごとにセンサー値を取得し、RAM上にタイムスタンプ付きで記録し始めます。
 

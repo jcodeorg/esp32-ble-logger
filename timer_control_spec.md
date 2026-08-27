@@ -93,7 +93,7 @@ SET_TIMER:{"p_time":"08:00","p_sec":30,"l_time":"06:00","l_min":720}
 
 ## 5. MicroPython（デバイス側）実装ロジック
 
-### 5.0 GPIOピン割り当て（`profiles/profile_pump_led.py`）
+### 5.0 GPIOピン割り当て（`sensors_actuators.py`）
 
 | アクチュエータ | ピン | 備考 |
 | --- | --- | --- |
@@ -113,7 +113,7 @@ elif event == 2: # 切断
 
 ```
 
-### 5.2 制御判定ロジック（`profile_pump_led.py` 等）
+### 5.2 制御判定ロジック（`sensors_actuators.py` 等）
 
 実装では `ble_connected` の参照は行わず、BLE切断イベントで `reset_actuator_overrides()` が呼ばれてオーバーライドが解除される前提で判定している。
 
