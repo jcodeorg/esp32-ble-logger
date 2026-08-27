@@ -40,11 +40,31 @@
         <p>現在のデバイスの蓄積データ件数: <span id="recordCount" style="font-weight: bold; color: #2980b9;">0</span> 行</p>
     </div>
 
+    <div class="card" id="actuatorCard" style="display:none;">
+        <h1>ポンプ・LED 制御（PcrIoT）</h1>
+        <p class="info-text">接続中は手動操作が最優先されます。BLE接続を解除すると、自動的にタイマー制御へ復帰します。</p>
+
+        <h2 style="font-size:16px;">手動操作</h2>
+        <button id="pumpOnBtn" disabled>ポンプ ON</button>
+        <button id="pumpOffBtn" disabled>ポンプ OFF</button>
+        <br>
+        <button id="ledOnBtn" disabled>LED ON</button>
+        <button id="ledOffBtn" disabled>LED OFF</button>
+
+        <h2 style="font-size:16px;">タイマー設定</h2>
+        <p class="info-text">
+            ポンプ 開始時刻: <input type="time" id="pumpTimeInput"> 稼働時間(秒): <input type="number" id="pumpSecInput" min="1" style="width:80px;"><br>
+            LED 開始時刻: <input type="time" id="ledTimeInput"> 稼働時間(分): <input type="number" id="ledMinInput" min="1" style="width:80px;">
+        </p>
+        <button id="saveTimerBtn" class="success" disabled>タイマー設定を保存して送信</button>
+    </div>
+
     <div class="card">
         <h1>リセット</h1>
         <p class="info-text">デバイス側に不要なデータ（ゴミデータなど）が残っていて、取得したくない場合は、このボタンで削除できます。</p>
         <button id="clearDeviceBtn" class="danger" disabled>デバイス側のログをクリア</button>
     </div>
+
 
     <div class="card">
         <h1>デバイス別データ管理</h1>
@@ -68,6 +88,7 @@
         let txCharacteristic = null;
         let incomingDataBuffer = "";
         let currentDeviceName = null;
+        let currentDeviceType = null; // BLEデバイス名の先頭部分（例: "PcrIoT"）
 
         // ブラウザに蓄積するデータ（デバイス名ごとのマップ。localStorageで永続化する）
         const STORAGE_KEY = "esp32_ble_logger_data_v1";
@@ -83,6 +104,25 @@
         }
         let deviceLogs = loadDeviceLogs();
 
+        // PcrIoT（ポンプ・LEDタイマー制御）構成のタイマー設定。マスターデータはブラウザ側のlocalStorage
+        const TIMER_CONFIG_PREFIX = "PcrIoT_Config_";
+        // 稼働時間を0にすることで、初期状態ではポンプ・LEDとも自動稼働しないようにしている
+        const DEFAULT_TIMER_CONFIG = {
+            pump: { time: "08:00", duration_sec: 0 },
+            led: { time: "06:00", duration_min: 0 },
+        };
+        function loadTimerConfig(deviceName) {
+            try {
+                const raw = localStorage.getItem(TIMER_CONFIG_PREFIX + deviceName);
+                return raw ? JSON.parse(raw) : { ...DEFAULT_TIMER_CONFIG };
+            } catch (e) {
+                return { ...DEFAULT_TIMER_CONFIG };
+            }
+        }
+        function saveTimerConfig(deviceName, config) {
+            localStorage.setItem(TIMER_CONFIG_PREFIX + deviceName, JSON.stringify(config));
+        }
+
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
         const fetchBtn = document.getElementById('fetchBtn');
@@ -93,10 +133,88 @@
         const recordCount = document.getElementById('recordCount');
         const deviceListEl = document.getElementById('deviceList');
 
+        const actuatorCard = document.getElementById('actuatorCard');
+        const pumpOnBtn = document.getElementById('pumpOnBtn');
+        const pumpOffBtn = document.getElementById('pumpOffBtn');
+        const ledOnBtn = document.getElementById('ledOnBtn');
+        const ledOffBtn = document.getElementById('ledOffBtn');
+        const pumpTimeInput = document.getElementById('pumpTimeInput');
+        const pumpSecInput = document.getElementById('pumpSecInput');
+        const ledTimeInput = document.getElementById('ledTimeInput');
+        const ledMinInput = document.getElementById('ledMinInput');
+        const saveTimerBtn = document.getElementById('saveTimerBtn');
+
         function appendLog(message) {
             logOutput.textContent += "\n" + message;
             logOutput.scrollTop = logOutput.scrollHeight;
         }
+
+        // コマンドを送信し、デバイスからの応答(OK_...)をログに残す簡易ヘルパー
+        async function sendCommand(commandStr, waitMs = 400) {
+            incomingDataBuffer = "";
+            await rxCharacteristic.writeValue(new TextEncoder().encode(commandStr + "\n"));
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            const response = incomingDataBuffer.trim();
+            incomingDataBuffer = "";
+            return response;
+        }
+
+        // DEVICE_TYPE == "PcrIoT" の場合のみアクチュエータ制御カードを表示し、設定を反映する
+        function updateActuatorUI() {
+            const isPcrIoT = currentDeviceType === "PcrIoT";
+            actuatorCard.style.display = isPcrIoT ? "block" : "none";
+            [pumpOnBtn, pumpOffBtn, ledOnBtn, ledOffBtn, saveTimerBtn].forEach(btn => {
+                btn.disabled = !isPcrIoT;
+            });
+            if (isPcrIoT) {
+                const config = loadTimerConfig(currentDeviceName);
+                pumpTimeInput.value = config.pump.time;
+                pumpSecInput.value = config.pump.duration_sec;
+                ledTimeInput.value = config.led.time;
+                ledMinInput.value = config.led.duration_min;
+            }
+        }
+
+        // BLE接続確立時に、ブラウザに保存済みのタイマー設定をデバイスへ自動送信する
+        async function syncTimerConfigToDevice() {
+            if (currentDeviceType !== "PcrIoT") return;
+            const config = loadTimerConfig(currentDeviceName);
+            const payload = {
+                p_time: config.pump.time,
+                p_sec: config.pump.duration_sec,
+                l_time: config.led.time,
+                l_min: config.led.duration_min,
+            };
+            const response = await sendCommand("SET_TIMER:" + JSON.stringify(payload));
+            appendLog("タイマー設定をデバイスに送信しました: " + JSON.stringify(payload) + (response ? ` (応答: ${response})` : ""));
+        }
+
+        pumpOnBtn.addEventListener('click', async () => {
+            const response = await sendCommand("PUMP:1");
+            appendLog("ポンプをONにしました" + (response ? ` (応答: ${response})` : ""));
+        });
+        pumpOffBtn.addEventListener('click', async () => {
+            const response = await sendCommand("PUMP:0");
+            appendLog("ポンプをOFFにしました" + (response ? ` (応答: ${response})` : ""));
+        });
+        ledOnBtn.addEventListener('click', async () => {
+            const response = await sendCommand("LED:1");
+            appendLog("LEDをONにしました" + (response ? ` (応答: ${response})` : ""));
+        });
+        ledOffBtn.addEventListener('click', async () => {
+            const response = await sendCommand("LED:0");
+            appendLog("LEDをOFFにしました" + (response ? ` (応答: ${response})` : ""));
+        });
+
+        saveTimerBtn.addEventListener('click', async () => {
+            const config = {
+                pump: { time: pumpTimeInput.value, duration_sec: parseInt(pumpSecInput.value, 10) || 0 },
+                led: { time: ledTimeInput.value, duration_min: parseInt(ledMinInput.value, 10) || 0 },
+            };
+            saveTimerConfig(currentDeviceName, config);
+            await syncTimerConfigToDevice();
+        });
+
 
         function getCurrentRows() {
             if (!currentDeviceName) return [];
@@ -187,6 +305,8 @@
                 }
 
                 currentDeviceName = deviceName;
+                // BLEデバイス名は "DEVICE_TYPE-xxxxx" 形式のため、先頭部分で構成種別を判定する
+                currentDeviceType = deviceName.split("-")[0];
 
                 const server = await bluetoothDevice.gatt.connect();
                 const service = await server.getPrimaryService(SERVICE_UUID);
@@ -208,6 +328,7 @@
                 fetchBtn.disabled = false;
                 clearDeviceBtn.disabled = false;
                 refreshDeviceUI();
+                updateActuatorUI();
 
                 appendLog(`デバイス「${currentDeviceName}」との接続に成功しました！`);
 
@@ -225,6 +346,9 @@
                 await rxCharacteristic.writeValue(new TextEncoder().encode("TIME:" + timeArray + "\n"));
                 appendLog("PCの現在時刻をデバイスに同期しました: " + now.toLocaleString());
 
+                // PcrIoT構成の場合、ブラウザに保存済みのタイマー設定を自動送信する
+                await syncTimerConfigToDevice();
+
                 bluetoothDevice.addEventListener('gattserverdisconnected', () => {
                     connectionStatus.textContent = "未接続";
                     connectionStatus.className = "status disconnected";
@@ -233,6 +357,8 @@
                     disconnectBtn.disabled = true;
                     fetchBtn.disabled = true;
                     clearDeviceBtn.disabled = true;
+                    currentDeviceType = null;
+                    updateActuatorUI();
                     appendLog("BLEデバイスが切断されました。");
                 });
 

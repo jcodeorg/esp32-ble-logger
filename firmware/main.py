@@ -16,9 +16,15 @@ import ssd1306  # OLEDディスプレイ用（I2C用）
 ACTIVE_PROFILE = "pump_led"
 
 if ACTIVE_PROFILE == "pump_led":
-    from profiles.profile_pump_led import DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators
+    from profiles.profile_pump_led import (
+        DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
+        update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
+    )
 else:
-    from profiles.profile_soil_cds import DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators
+    from profiles.profile_soil_cds import (
+        DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
+        update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
+    )
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
 MEASURE_INTERVAL = 3 # 3600 
@@ -200,7 +206,12 @@ class BLEUARTServer:
             elif event == 2: # 切断
                 self._conn_handle = None
                 ble_connected = False
-                print("[BLE] 切断されました")
+                print("[BLE] 切断されました - タイマー自動制御に復帰します")
+                # 手動オーバーライドを解除し、アクチュエータをタイマー判定に委ねる
+                try:
+                    reset_actuator_overrides()
+                except Exception as e:
+                    print("[ERROR] アクチュエータオーバーライド解除中に例外発生:", e)
                 self._advertise(self._name)
             elif event == 3: # データ受信 (Chromebookからの書き込み)
                 conn_handle, value_handle = data
@@ -277,6 +288,26 @@ class BLEUARTServer:
                 self.send("OK_CLEARED\n")
                 oled_flash_msg = "Cleared!"
                 oled_flash_until = time.time() + 2
+
+            elif cmd.startswith("SET_TIMER:"):
+                # タイマー設定コマンド: SET_TIMER:{"p_time":"08:00","p_sec":30,"l_time":"06:00","l_min":720}
+                try:
+                    import json
+                    config = json.loads(cmd[len("SET_TIMER:"):])
+                    update_timer_config(config)
+                    self.send("OK_TIMER_SET\n")
+                except Exception as e:
+                    print("[ERROR] タイマー設定失敗:", e, "受信文字列:", cmd)
+
+            elif cmd.startswith("PUMP:"):
+                # 手動操作コマンド: PUMP:1 / PUMP:0
+                set_pump_manual(cmd[len("PUMP:"):] == "1")
+                self.send("OK_MANUAL\n")
+
+            elif cmd.startswith("LED:"):
+                # 手動操作コマンド: LED:1 / LED:0
+                set_led_manual(cmd[len("LED:"):] == "1")
+                self.send("OK_MANUAL\n")
         except Exception as e:
             print("[ERROR] コマンド処理中に例外発生:", e)
 

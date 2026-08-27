@@ -9,6 +9,12 @@ main.py から呼ばれる共通インターフェース:
     read_sensor(i2c)    : センサー値を dict で返す（毎回の計測・OLED更新時に呼ばれる）
     init_actuators()    : アクチュエータの初期化（起動時に1回呼ばれる）
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる）
+
+    以下はタイマー制御仕様（timer_control_spec.md）に基づく追加インターフェース:
+    update_timer_config(config) : ブラウザから受信したタイマー設定(dict)を反映する
+    set_pump_manual(state)      : ポンプの手動ON/OFF。手動オーバーライドを有効化する
+    set_led_manual(state)       : LEDの手動ON/OFF。手動オーバーライドを有効化する
+    reset_actuator_overrides()  : BLE切断時に手動オーバーライドを解除し、タイマー判定に戻す
 """
 import time
 from machine import Pin, ADC
@@ -18,17 +24,18 @@ from bh1750 import BH1750
 DEVICE_TYPE = "PcrIoT"
 CSV_FIELDS = ["temp", "humid", "soil", "light"]
 
-# ポンプ・LEDの制御ピン（お使いの配線に合わせて変更してください）
-PUMP_PIN_NO = 4
-LED_PIN_NO = 5
+# ポンプ・LEDの制御ピン（お使いの配線に合わせて変更してください。両ピンともPWM対応だが現状はON/OFF制御のみ）
+PUMP_PIN_NO = 0
+LED_PIN_NO = 2
 
-# タイマー設定（24時間表記の時刻。日をまたぐ場合は開始>終了でも判定できるようにしている）
-PUMP_ON_HOUR = 8
-PUMP_ON_MINUTE = 0
-PUMP_DURATION_SEC = 300  # ポンプを動かす秒数
-
-LED_ON_HOUR = 18   # この時刻からLEDを点灯
-LED_OFF_HOUR = 22  # この時刻でLEDを消灯
+# タイマー設定の既定値（ブラウザから SET_TIMER で上書きされる。マスターデータはブラウザ側）
+# 稼働時間を0にすることで、初期状態ではポンプ・LEDとも自動稼働しないようにしている
+_timer_config = {
+    "p_time": "08:00",
+    "p_sec": 0,
+    "l_time": "06:00",
+    "l_min": 0,
+}
 
 _light_sensor = None
 _adc_soil = None
@@ -36,7 +43,8 @@ _pump_pin = None
 _led_pin = None
 _pump_state = 0
 _led_state = 0
-_pump_started_epoch = None
+_pump_manual_override = False
+_led_manual_override = False
 
 
 def init_sensors(i2c):
@@ -86,36 +94,80 @@ def init_actuators():
     _led_pin.value(0)
 
 
-def _in_led_window(hour):
-    if LED_ON_HOUR <= LED_OFF_HOUR:
-        return LED_ON_HOUR <= hour < LED_OFF_HOUR
-    return hour >= LED_ON_HOUR or hour < LED_OFF_HOUR  # 日をまたぐ設定にも対応
+def update_timer_config(config):
+    """SET_TIMERコマンドで受信した設定(dict)を反映する。想定外のキーは無視する"""
+    for key in ("p_time", "p_sec", "l_time", "l_min"):
+        if key in config:
+            _timer_config[key] = config[key]
+    print("[INFO] タイマー設定を更新しました:", _timer_config)
+
+
+def set_pump_manual(state):
+    """手動操作でポンプをON/OFFし、以後のタイマー判定を一時的にスルーする"""
+    global _pump_state, _pump_manual_override
+    _pump_manual_override = True
+    _pump_state = 1 if state else 0
+    if _pump_pin:
+        _pump_pin.value(_pump_state)
+
+
+def set_led_manual(state):
+    """手動操作でLEDをON/OFFし、以後のタイマー判定を一時的にスルーする"""
+    global _led_state, _led_manual_override
+    _led_manual_override = True
+    _led_state = 1 if state else 0
+    if _led_pin:
+        _led_pin.value(_led_state)
+
+
+def reset_actuator_overrides():
+    """BLE切断時に手動オーバーライドを解除し、タイマー制御へ復帰させる"""
+    global _pump_manual_override, _led_manual_override
+    _pump_manual_override = False
+    _led_manual_override = False
+
+
+def _hhmm_to_seconds(hhmm):
+    """"HH:MM" を当日0時からの経過秒数に変換する"""
+    hour_str, minute_str = hhmm.split(":")
+    return int(hour_str) * 3600 + int(minute_str) * 60
+
+
+def _is_in_timer_window(start_seconds, duration_sec, now_epoch):
+    """現在時刻が「開始時刻〜開始時刻+稼働時間」の範囲内かどうかを判定する（日またぎにも対応）"""
+    t = time.localtime(now_epoch)
+    seconds_today = t[3] * 3600 + t[4] * 60 + t[5]
+    end_seconds = start_seconds + duration_sec
+
+    if end_seconds <= 86400:
+        # 日をまたがない通常のケース
+        return start_seconds <= seconds_today < end_seconds
+    # 日をまたぐケース（例: 23:00開始で3時間稼働 -> 翌日2:00まで）
+    return seconds_today >= start_seconds or seconds_today < (end_seconds - 86400)
 
 
 def tick_actuators(now_epoch):
-    """RTCの現在時刻を見てポンプ・LEDのON/OFFを切り替える（メインループから毎秒呼ばれる）"""
-    global _pump_state, _led_state, _pump_started_epoch
+    """RTCの現在時刻とタイマー設定を見てポンプ・LEDのON/OFFを切り替える（メインループから毎秒呼ばれる）"""
+    global _pump_state, _led_state
 
     if _pump_pin is None or _led_pin is None:
         return
 
-    t = time.localtime(now_epoch)
-    hour, minute = t[3], t[4]
+    # ポンプ: 手動オーバーライド中はタイマー判定をスキップする
+    if not _pump_manual_override:
+        pump_should_be_on = _is_in_timer_window(
+            _hhmm_to_seconds(_timer_config["p_time"]), _timer_config["p_sec"], now_epoch
+        )
+        if pump_should_be_on != bool(_pump_state):
+            _pump_state = 1 if pump_should_be_on else 0
+            _pump_pin.value(_pump_state)
 
-    # ポンプ: 設定時刻ちょうどに開始し、PUMP_DURATION_SEC秒後に停止する
-    if _pump_started_epoch is None:
-        if hour == PUMP_ON_HOUR and minute == PUMP_ON_MINUTE:
-            _pump_started_epoch = now_epoch
-            _pump_state = 1
-            _pump_pin.value(1)
-    else:
-        if now_epoch - _pump_started_epoch >= PUMP_DURATION_SEC:
-            _pump_state = 0
-            _pump_pin.value(0)
-            _pump_started_epoch = None
+    # LED: 手動オーバーライド中はタイマー判定をスキップする
+    if not _led_manual_override:
+        led_should_be_on = _is_in_timer_window(
+            _hhmm_to_seconds(_timer_config["l_time"]), _timer_config["l_min"] * 60, now_epoch
+        )
+        if led_should_be_on != bool(_led_state):
+            _led_state = 1 if led_should_be_on else 0
+            _led_pin.value(_led_state)
 
-    # LED: 時間帯で単純にON/OFF
-    led_should_be_on = _in_led_window(hour)
-    if led_should_be_on != bool(_led_state):
-        _led_state = 1 if led_should_be_on else 0
-        _led_pin.value(_led_state)
