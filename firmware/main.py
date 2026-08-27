@@ -233,6 +233,8 @@ class BLEUARTServer:
                     )
                     self.send(line)
                     time.sleep(0.05) # パケットあふれ防止のウェイト
+                # ブラウザ側が固定タイムアウトではなく完了を検知できるようにマーカーを送る
+                self.send("END_LOG\n")
                 print("[INFO] 送信完了")
                 
             elif cmd == "CLEAR_LOG":

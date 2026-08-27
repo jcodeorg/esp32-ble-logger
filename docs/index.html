@@ -262,34 +262,53 @@
                 
                 await rxCharacteristic.writeValue(new TextEncoder().encode("GET_LOG\n"));
 
-                // データ受信を待つ（3秒）
-                setTimeout(() => {
-                    try {
-                        if (!incomingDataBuffer.trim()) {
-                            appendLog("データが受信できませんでした（またはログが空です）。");
+                // デバイスが送信完了マーカー(END_LOG)を送るまで待つ（件数が多くても取りこぼさないように）
+                const waitForEndMarker = () => new Promise((resolve, reject) => {
+                    const timeoutMs = 15000; // 万一マーカーが届かない場合の保険
+                    const intervalMs = 100;
+                    let waited = 0;
+                    const timer = setInterval(() => {
+                        if (incomingDataBuffer.includes("END_LOG")) {
+                            clearInterval(timer);
+                            resolve();
                             return;
                         }
+                        waited += intervalMs;
+                        if (waited >= timeoutMs) {
+                            clearInterval(timer);
+                            resolve(); // タイムアウト時もここまで受信した分で処理を続行する
+                        }
+                    }, intervalMs);
+                });
 
-                        const lines = incomingDataBuffer.trim().split('\n').filter(line => !line.startsWith("timestamp"));
-                        if (!deviceLogs[currentDeviceName]) deviceLogs[currentDeviceName] = [];
-                        const rows = deviceLogs[currentDeviceName];
-                        let newCount = 0;
+                await waitForEndMarker();
 
-                        lines.forEach((line) => {
-                            if (!rows.includes(line)) {
-                                rows.push(line);
-                                newCount++;
-                            }
-                        });
-
-                        saveDeviceLogs();
-                        refreshDeviceUI();
-                        appendLog(`データ受信成功！ 新規 ${newCount} 件を追加しました（「${currentDeviceName}」累計: ${rows.length} 件）`);
-                    } finally {
-                        fetchBtn.disabled = false;
-                        fetchBtn.textContent = originalLabel;
+                try {
+                    const dataOnly = incomingDataBuffer.replace("END_LOG", "");
+                    if (!dataOnly.trim()) {
+                        appendLog("データが受信できませんでした（またはログが空です）。");
+                        return;
                     }
-                }, 3000);
+
+                    const lines = dataOnly.trim().split('\n').filter(line => !line.startsWith("timestamp"));
+                    if (!deviceLogs[currentDeviceName]) deviceLogs[currentDeviceName] = [];
+                    const rows = deviceLogs[currentDeviceName];
+                    let newCount = 0;
+
+                    lines.forEach((line) => {
+                        if (!rows.includes(line)) {
+                            rows.push(line);
+                            newCount++;
+                        }
+                    });
+
+                    saveDeviceLogs();
+                    refreshDeviceUI();
+                    appendLog(`データ受信成功！ 新規 ${newCount} 件を追加しました（「${currentDeviceName}」累計: ${rows.length} 件）`);
+                } finally {
+                    fetchBtn.disabled = false;
+                    fetchBtn.textContent = originalLabel;
+                }
 
             } catch (error) {
                 console.error(error);
