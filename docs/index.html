@@ -14,6 +14,8 @@
         button.danger:hover { background: #c0392b; }
         button.success { background: #2ecc71; }
         button.success:hover { background: #27ae60; }
+        button.pending { background: #e67e22; }
+        button.pending:hover { background: #d35400; }
         .status { font-weight: bold; padding: 4px 8px; border-radius: 4px; display: inline-block; }
         .disconnected { background: #f8d7da; color: #721c24; }
         .connected { background: #d4edda; color: #155724; }
@@ -53,10 +55,10 @@
 
         <h2 style="font-size:16px;">タイマー設定</h2>
         <p class="info-text">
-            ポンプ 開始時刻: <input type="time" id="pumpTimeInput"> 稼働時間(秒): <input type="number" id="pumpSecInput" min="1" style="width:80px;"><br>
-            LED 開始時刻: <input type="time" id="ledTimeInput"> 稼働時間(分): <input type="number" id="ledMinInput" min="1" style="width:80px;">
+            ポンプ 開始時刻: <input type="time" id="pumpTimeInput"> 稼働時間(秒): <input type="number" id="pumpSecInput" min="0" style="width:80px;"><br>
+            LED 開始時刻: <input type="time" id="ledTimeInput"> 稼働時間(hh:mm): <input type="time" id="ledMinInput">
         </p>
-        <button id="saveTimerBtn" class="success" disabled>タイマー設定を保存して送信</button>
+        <button id="saveTimerBtn" disabled>タイマー設定を保存して送信</button>
     </div>
 
     <div class="card">
@@ -160,10 +162,21 @@
         }
 
         // DEVICE_TYPE == "PcrIoT" の場合のみアクチュエータ制御カードを表示し、設定を反映する
+        // LEDの稼働時間は内部では分数(int)で保持し、入力欄(type="time")との間で "HH:MM" に相互変換する
+        function minutesToHHMM(totalMinutes) {
+            const h = Math.floor(totalMinutes / 60);
+            const m = totalMinutes % 60;
+            return String(h).padStart(2, '0') + ":" + String(m).padStart(2, '0');
+        }
+        function hhmmToMinutes(hhmm) {
+            const [h, m] = (hhmm || "00:00").split(":").map(Number);
+            return (h || 0) * 60 + (m || 0);
+        }
+
         function updateActuatorUI() {
             const isPcrIoT = currentDeviceType === "PcrIoT";
             actuatorCard.style.display = isPcrIoT ? "block" : "none";
-            [pumpOnBtn, pumpOffBtn, ledOnBtn, ledOffBtn, saveTimerBtn].forEach(btn => {
+            [pumpOnBtn, pumpOffBtn, ledOnBtn, ledOffBtn].forEach(btn => {
                 btn.disabled = !isPcrIoT;
             });
             if (isPcrIoT) {
@@ -171,9 +184,22 @@
                 pumpTimeInput.value = config.pump.time;
                 pumpSecInput.value = config.pump.duration_sec;
                 ledTimeInput.value = config.led.time;
-                ledMinInput.value = config.led.duration_min;
+                ledMinInput.value = minutesToHHMM(config.led.duration_min);
             }
+            // 読み込み直後は未変更状態なので保存ボタンは無効にする（変更されたらリスナーで有効化）
+            saveTimerBtn.disabled = true;
+            saveTimerBtn.classList.remove('pending');
         }
+
+        // タイマー入力欄が変更されたら保存ボタンを有効化する
+        [pumpTimeInput, pumpSecInput, ledTimeInput, ledMinInput].forEach(input => {
+            input.addEventListener('input', () => {
+                if (currentDeviceType === "PcrIoT") {
+                    saveTimerBtn.disabled = false;
+                    saveTimerBtn.classList.add('pending');
+                }
+            });
+        });
 
         // BLE接続確立時に、ブラウザに保存済みのタイマー設定をデバイスへ自動送信する
         async function syncTimerConfigToDevice() {
@@ -209,10 +235,13 @@
         saveTimerBtn.addEventListener('click', async () => {
             const config = {
                 pump: { time: pumpTimeInput.value, duration_sec: parseInt(pumpSecInput.value, 10) || 0 },
-                led: { time: ledTimeInput.value, duration_min: parseInt(ledMinInput.value, 10) || 0 },
+                led: { time: ledTimeInput.value, duration_min: hhmmToMinutes(ledMinInput.value) },
             };
             saveTimerConfig(currentDeviceName, config);
             await syncTimerConfigToDevice();
+            // 送信完了したら次の変更までボタンを無効化して二重送信を防ぐ
+            saveTimerBtn.disabled = true;
+            saveTimerBtn.classList.remove('pending');
         });
 
 
