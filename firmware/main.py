@@ -1,6 +1,7 @@
 import time
 import struct
 import bluetooth
+import machine
 from machine import Pin, SoftI2C, RTC, ADC
 import ssd1306  # OLEDディスプレイ用（I2C用）
 from ahtx0 import AHT20
@@ -12,6 +13,17 @@ from ahtx0 import AHT20
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
 MEASURE_INTERVAL = 3 # 3600 
 last_measure_tick = 0
+
+# RAM上に保持するログの上限件数（超過分は古い方から破棄してメモリ枯渇を防ぐ）
+MAX_LOG_ENTRIES = 5000
+
+# ウォッチドッグタイマー: この秒数以内にfeed()されないとデバイスを自動リセットする
+WDT_TIMEOUT_MS = 15000
+try:
+    wdt = machine.WDT(timeout=WDT_TIMEOUT_MS)
+except Exception as e:
+    print("[WARN] WDT初期化失敗（このボードでは未対応の可能性）:", e)
+    wdt = None
 
 # I2Cピンの定義（お使いのボードに合わせてSCL/SDAを変更してください。例: SCL=23, SDA=22）
 i2c = SoftI2C(scl=Pin(23), sda=Pin(22))
@@ -63,8 +75,13 @@ def read_sensor():
         print("AHT20 error:", e)
         temp = 0.0
         humid = 0.0
-    soil = adc_soil.read()
-    light = adc_cds.read()
+    try:
+        soil = adc_soil.read()
+        light = adc_cds.read()
+    except Exception as e:
+        print("ADC error:", e)
+        soil = 0
+        light = 0
     return temp, humid, soil, light
 
 def get_formatted_time():
@@ -162,25 +179,32 @@ class BLEUARTServer:
         return "".join(name)
 
     def _irq(self, event, data):
+        # BLEスタックのコールバック内で例外を漏らすとBLE自体が不安定になるため必ず捕捉する
         global ble_connected
-        if event == 1: # 接続
-            self._conn_handle, _, _ = data
-            ble_connected = True
-            print("[BLE] 接続されました")
-        elif event == 2: # 切断
-            self._conn_handle = None
-            ble_connected = False
-            print("[BLE] 切断されました")
-            self._advertise(self._name)
-        elif event == 3: # データ受信 (Chromebookからの書き込み)
-            conn_handle, value_handle = data
-            if value_handle == self._rx_handle:
-                packet = self._ble.gatts_read(self._rx_handle).decode('utf-8')
-                self.handle_command(packet.strip())
+        try:
+            if event == 1: # 接続
+                self._conn_handle, _, _ = data
+                ble_connected = True
+                print("[BLE] 接続されました")
+            elif event == 2: # 切断
+                self._conn_handle = None
+                ble_connected = False
+                print("[BLE] 切断されました")
+                self._advertise(self._name)
+            elif event == 3: # データ受信 (Chromebookからの書き込み)
+                conn_handle, value_handle = data
+                if value_handle == self._rx_handle:
+                    packet = self._ble.gatts_read(self._rx_handle).decode('utf-8')
+                    self.handle_command(packet.strip())
+        except Exception as e:
+            print("[ERROR] BLE割り込み処理中に例外発生:", e)
 
     def send(self, data):
-        if self._conn_handle is not None:
-            self._ble.gatts_notify(self._conn_handle, self._tx_handle, data)
+        try:
+            if self._conn_handle is not None:
+                self._ble.gatts_notify(self._conn_handle, self._tx_handle, data)
+        except Exception as e:
+            print("[ERROR] BLE送信失敗:", e)
 
     def _advertise(self, name):
         adv_data = bytearray(b'\x02\x01\x06') + bytearray((len(name) + 1, 0x09)) + name.encode()
@@ -253,40 +277,67 @@ class BLEUARTServer:
 def main():
     global last_measure_tick, ble_device_name
     print("ESP32 環境ロガー起動")
-    
-    ble_server = BLEUARTServer()
-    ble_device_name = ble_server._name
-    
-    # 起動直後の初期値取得
-    temp, humid, soil, light = read_sensor()
-    update_oled(temp, humid, soil, light, "Started")
-    
-    while True:
-        current_tick = time.time()
-        
-        # 1時間（MEASURE_INTERVAL）ごとの計測
-        if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
-            temp, humid, soil, light = read_sensor()
 
-            # RTC未同期でも蓄積し、epochとsynced状態を記録しておく（同期時に過去分のepochを補正する）
-            row = {
-                "epoch": time.time(),
-                "temp": temp,
-                "humid": humid,
-                "soil": soil,
-                "light": light,
-                "synced": rtc_synced,
-            }
-            log_buffer.append(row)
-            status = "" if rtc_synced else "（RTC未同期、後で補正されます）"
-            print(f"[計測] {epoch_to_str(row['epoch'])} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件){status}")
-            
-            last_measure_tick = current_tick
-            
-        # OLEDの画面更新（毎秒）
+    # BLE初期化に失敗しても諦めずにリトライする（センサー計測自体は継続できるようにする）
+    ble_server = None
+    while ble_server is None:
+        try:
+            ble_server = BLEUARTServer()
+            ble_device_name = ble_server._name
+        except Exception as e:
+            print("[ERROR] BLE初期化失敗。5秒後にリトライします:", e)
+            time.sleep(5)
+
+    # 起動直後の初期値取得
+    temp, humid, soil, light = 0.0, 0.0, 0, 0
+    try:
         temp, humid, soil, light = read_sensor()
-        flash = oled_flash_msg if oled_flash_msg and time.time() < oled_flash_until else None
-        update_oled(temp, humid, soil, light, flash)
+    except Exception as e:
+        print("[ERROR] 起動時センサー読み取り失敗:", e)
+    update_oled(temp, humid, soil, light, "Started")
+
+    while True:
+        if wdt:
+            wdt.feed()
+
+        current_tick = time.time()
+
+        # 1時間（MEASURE_INTERVAL）ごとの計測（センサー障害やメモリ不足があっても稼働を継続する）
+        if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
+            try:
+                temp, humid, soil, light = read_sensor()
+
+                # RTC未同期でも蓄積し、epochとsynced状態を記録しておく（同期時に過去分のepochを補正する）
+                row = {
+                    "epoch": time.time(),
+                    "temp": temp,
+                    "humid": humid,
+                    "soil": soil,
+                    "light": light,
+                    "synced": rtc_synced,
+                }
+                log_buffer.append(row)
+
+                # 上限を超えたら古いデータから破棄してメモリ枯渇を防ぐ
+                if len(log_buffer) > MAX_LOG_ENTRIES:
+                    del log_buffer[0 : len(log_buffer) - MAX_LOG_ENTRIES]
+
+                status = "" if rtc_synced else "（RTC未同期、後で補正されます）"
+                print(f"[計測] {epoch_to_str(row['epoch'])} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件){status}")
+
+                last_measure_tick = current_tick
+            except Exception as e:
+                print("[ERROR] 計測・蓄積処理中に例外発生:", e)
+                last_measure_tick = current_tick
+
+        # OLEDの画面更新（毎秒。失敗してもループ自体は継続する）
+        try:
+            temp, humid, soil, light = read_sensor()
+            flash = oled_flash_msg if oled_flash_msg and time.time() < oled_flash_until else None
+            update_oled(temp, humid, soil, light, flash)
+        except Exception as e:
+            print("[ERROR] OLED更新中に例外発生:", e)
+
         time.sleep(1)
 
 if __name__ == "__main__":
@@ -294,3 +345,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("プログラムを停止しました。")
+    except Exception as e:
+        # 想定外の致命的な例外はソフトリセットして復旧する（WDTがあればそちらでも救済される）
+        print("[FATAL] 想定外のエラーが発生したため再起動します:", e)
+        time.sleep(2)
+        machine.reset()
