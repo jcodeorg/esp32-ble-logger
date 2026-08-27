@@ -71,6 +71,11 @@ def get_formatted_time():
     t = rtc.datetime()
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[4], t[5], t[6])
 
+def epoch_to_str(epoch):
+    """time.time()と同じ基準のepoch秒を文字列に変換する（RTC未同期時はダミー日時になる）"""
+    t = time.localtime(epoch)
+    return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[3], t[4], t[5])
+
 def update_oled(temp, humid, soil, light, status_msg=None):
     if not display:
         return
@@ -193,11 +198,24 @@ class BLEUARTServer:
                     time_arr = json.loads(cmd[5:])
                     if len(time_arr) < 6:
                         raise ValueError("time_arr too short: {}".format(time_arr))
+                    # 同期前のRTC(未補正)epochを記録し、正しいepochとの差分を未同期時の蓄積データ補正に使う
+                    old_epoch = time.time()
+                    new_epoch = time.mktime((time_arr[0], time_arr[1], time_arr[2], time_arr[3], time_arr[4], time_arr[5], 0, 0))
+                    delta = new_epoch - old_epoch
+
                     # (年, 月, 日, 曜日(0-6), 時, 分, 秒, サブ秒)
                     # MicroPythonの曜日計算はざっくりでOKなので0を入れる
                     rtc.datetime((time_arr[0], time_arr[1], time_arr[2], 0, time_arr[3], time_arr[4], time_arr[5], 0))
                     rtc_synced = True
-                    print("[INFO] 時刻を同期しました:", get_formatted_time())
+
+                    # 未同期の間に蓄積したログのタイムスタンプを補正する
+                    corrected = 0
+                    for row in log_buffer:
+                        if not row["synced"]:
+                            row["epoch"] += delta
+                            row["synced"] = True
+                            corrected += 1
+                    print("[INFO] 時刻を同期しました:", get_formatted_time(), "（過去ログ{}件のタイムスタンプを補正）".format(corrected))
                 except Exception as e:
                     print("[ERROR] 時刻同期失敗:", e, "受信文字列:", cmd)
                     
@@ -210,7 +228,10 @@ class BLEUARTServer:
                 time.sleep(0.1)
                 
                 for row in log_buffer:
-                    self.send(row)
+                    line = "{},{},{},{},{},{}\n".format(
+                        epoch_to_str(row["epoch"]), row["temp"], row["humid"], row["soil"], row["light"], ble_device_name
+                    )
+                    self.send(line)
                     time.sleep(0.05) # パケットあふれ防止のウェイト
                 print("[INFO] 送信完了")
                 
@@ -244,15 +265,19 @@ def main():
         # 1時間（MEASURE_INTERVAL）ごとの計測
         if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
             temp, humid, soil, light = read_sensor()
-            timestamp = get_formatted_time()
-            
-            if rtc_synced:
-                # RAMに蓄積（RTCが未同期の間は不正な時刻になるため蓄積しない）
-                row = f"{timestamp},{temp},{humid},{soil},{light},{ble_device_name}\n"
-                log_buffer.append(row)
-                print(f"[計測] {timestamp} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件)")
-            else:
-                print("[INFO] RTC未同期のため蓄積をスキップしました")
+
+            # RTC未同期でも蓄積し、epochとsynced状態を記録しておく（同期時に過去分のepochを補正する）
+            row = {
+                "epoch": time.time(),
+                "temp": temp,
+                "humid": humid,
+                "soil": soil,
+                "light": light,
+                "synced": rtc_synced,
+            }
+            log_buffer.append(row)
+            status = "" if rtc_synced else "（RTC未同期、後で補正されます）"
+            print(f"[計測] {epoch_to_str(row['epoch'])} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件){status}")
             
             last_measure_tick = current_tick
             
