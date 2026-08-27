@@ -1,5 +1,6 @@
 """
-デバイスプロファイル: 照度センサー(BH1750) + 水中ポンプ + LED タイマー制御構成
+デバイスプロファイル: 温湿度(AHT20) + 土壌水分 + 照度センサー(BH1750) + 水中ポンプ + LED タイマー制御構成
+（ポンプ・LEDの状態はCSV出力の対象外。read_sensor()が返すのはセンサー値のみ）
 
 main.py から呼ばれる共通インターフェース:
     DEVICE_TYPE   : BLEデバイス名やログに埋め込むこの構成の識別子
@@ -10,12 +11,12 @@ main.py から呼ばれる共通インターフェース:
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる）
 """
 import time
-from machine import Pin
+from machine import Pin, ADC
 from ahtx0 import AHT20
 from bh1750 import BH1750
 
 DEVICE_TYPE = "PcrIoT"
-CSV_FIELDS = ["temp", "humid", "light", "pump", "led"]
+CSV_FIELDS = ["temp", "humid", "soil", "light"]
 
 # ポンプ・LEDの制御ピン（お使いの配線に合わせて変更してください）
 PUMP_PIN_NO = 4
@@ -30,6 +31,7 @@ LED_ON_HOUR = 18   # この時刻からLEDを点灯
 LED_OFF_HOUR = 22  # この時刻でLEDを消灯
 
 _light_sensor = None
+_adc_soil = None
 _pump_pin = None
 _led_pin = None
 _pump_state = 0
@@ -38,12 +40,17 @@ _pump_started_epoch = None
 
 
 def init_sensors(i2c):
-    global _light_sensor
+    global _light_sensor, _adc_soil
     try:
         _light_sensor = BH1750(i2c)
     except Exception as e:
         print("BH1750 init error:", e)
         _light_sensor = None
+
+    # A1: 土壌水分センサ用 ADC
+    _adc_soil = ADC(Pin(1, Pin.IN))
+    _adc_soil.atten(ADC.ATTN_11DB)   # 0〜3.3V の範囲を読む
+    _adc_soil.width(ADC.WIDTH_12BIT) # 分解能 12 ビット（0〜4095）
 
 
 def read_sensor(i2c):
@@ -57,12 +64,18 @@ def read_sensor(i2c):
         humid = 0.0
 
     try:
+        soil = _adc_soil.read()
+    except Exception as e:
+        print("ADC error:", e)
+        soil = 0
+
+    try:
         light = _light_sensor.luminance() if _light_sensor else 0.0
     except Exception as e:
         print("BH1750 error:", e)
         light = 0.0
 
-    return {"temp": temp, "humid": humid, "light": light, "pump": _pump_state, "led": _led_state}
+    return {"temp": temp, "humid": humid, "soil": soil, "light": light}
 
 
 def init_actuators():
