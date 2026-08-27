@@ -12,7 +12,7 @@ main.py から呼ばれる共通インターフェース:
 from machine import Pin, ADC
 from ahtx0 import AHT20
 
-DEVICE_TYPE = "SOIL_CDS"
+DEVICE_TYPE = "EnvLog"
 CSV_FIELDS = ["temp", "humid", "soil", "light"]
 
 _adc_soil = None

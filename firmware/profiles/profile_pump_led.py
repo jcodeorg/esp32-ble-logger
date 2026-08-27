@@ -14,7 +14,7 @@ from machine import Pin
 from ahtx0 import AHT20
 from bh1750 import BH1750
 
-DEVICE_TYPE = "PUMP_LED"
+DEVICE_TYPE = "PcrIoT"
 CSV_FIELDS = ["temp", "humid", "light", "pump", "led"]
 
 # ポンプ・LEDの制御ピン（お使いの配線に合わせて変更してください）

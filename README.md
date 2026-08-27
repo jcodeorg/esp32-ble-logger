@@ -65,7 +65,7 @@ esp32-ble-logger/
 
   | 関数/変数 | 役割 |
   |---|---|
-  | `DEVICE_TYPE` | BLEデバイス名（例: `EnvLog-SOIL_CDS-xxxxx`）に埋め込む構成の識別子 |
+  | `DEVICE_TYPE` | BLEデバイス名（例: `DeviceType-xxxxx`）に埋め込む構成の識別子 |
   | `CSV_FIELDS` | `read_sensor()` が返す値のキーを、CSV出力・OLED表示に使う順序で並べたリスト |
   | `init_sensors(i2c)` | センサーの初期化（起動時に1回） |
   | `read_sensor(i2c)` | センサー値を `dict` で返す（計測・OLED更新のたびに呼ばれる） |

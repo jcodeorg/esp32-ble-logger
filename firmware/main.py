@@ -133,7 +133,7 @@ class BLEUARTServer:
 
         if name is None:
             mac = self._ble.config('mac')[1]  # 6バイトのMACアドレス
-            name = "EnvLog-" + self.get_friendly_name(mac) + "-" + DEVICE_TYPE
+            name = DEVICE_TYPE + "-" + self.get_friendly_name(mac)
 
         # Nordic UART Service の UUID（RX=書き込み用, TX=通知用。ブラウザ側と合わせる）
         self.UART_UUID = bluetooth.UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
