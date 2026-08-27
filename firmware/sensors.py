@@ -8,8 +8,7 @@ main.py から呼ばれる共通インターフェース:
     read_sensor(i2c)    : センサー値を dict で返す（毎回の計測・OLED更新時に呼ばれる）
     init_actuators()    : アクチュエータの初期化（起動時に1回呼ばれる。このプロファイルでは未使用）
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる。このプロファイルでは未使用）
-    update_timer_config(config) / set_pump_manual(state) / set_led_manual(state) / reset_actuator_overrides()
-        : タイマー制御仕様(timer_control_spec.md)向けの追加インターフェース。このプロファイルでは未使用
+    handle_actuator_command(command, payload) : SET_TIMER/PUMP/LED/RESET_OVERRIDE をまとめて処理する（このプロファイルでは未使用）
 """
 from machine import Pin, ADC
 from ahtx0 import AHT20
@@ -63,17 +62,5 @@ def tick_actuators(now_epoch):
     pass  # このプロファイルにはアクチュエータなし
 
 
-def update_timer_config(config):
-    pass  # このプロファイルにはアクチュエータなし
-
-
-def set_pump_manual(state):
-    pass  # このプロファイルにはアクチュエータなし
-
-
-def set_led_manual(state):
-    pass  # このプロファイルにはアクチュエータなし
-
-
-def reset_actuator_overrides():
+def handle_actuator_command(command, payload=None):
     pass  # このプロファイルにはアクチュエータなし

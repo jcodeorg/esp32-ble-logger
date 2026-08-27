@@ -9,12 +9,8 @@ main.py から呼ばれる共通インターフェース:
     read_sensor(i2c)    : センサー値を dict で返す（毎回の計測・OLED更新時に呼ばれる）
     init_actuators()    : アクチュエータの初期化（起動時に1回呼ばれる）
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる）
-
-    以下はタイマー制御仕様（timer_control_spec.md）に基づく追加インターフェース:
-    update_timer_config(config) : ブラウザから受信したタイマー設定(dict)を反映する
-    set_pump_manual(state)      : ポンプの手動ON/OFF。手動オーバーライドを有効化する
-    set_led_manual(state)       : LEDの手動ON/OFF。手動オーバーライドを有効化する
-    reset_actuator_overrides()  : BLE切断時に手動オーバーライドを解除し、タイマー判定に戻す
+    handle_actuator_command(command, payload) : SET_TIMER/PUMP/LED/RESET_OVERRIDE をまとめて処理する
+        （タイマー制御仕様 timer_control_spec.md 参照）
 """
 import time
 from machine import Pin, ADC
@@ -94,37 +90,38 @@ def init_actuators():
     _led_pin.value(0)
 
 
-def update_timer_config(config):
-    """SET_TIMERコマンドで受信した設定(dict)を反映する。想定外のキーは無視する"""
-    for key in ("p_time", "p_sec", "l_time", "l_min"):
-        if key in config:
-            _timer_config[key] = config[key]
-    print("[INFO] タイマー設定を更新しました:", _timer_config)
+def handle_actuator_command(command, payload=None):
+    """アクチュエータ関連のコマンドをまとめて処理する（main.pyからの公開インターフェースを減らすため統合）
 
+    command:
+        "SET_TIMER"      : payload=dict でタイマー設定を更新する
+        "PUMP"           : payload=bool でポンプを手動ON/OFFし、手動オーバーライドを有効化する
+        "LED"            : payload=bool でLEDを手動ON/OFFし、手動オーバーライドを有効化する
+        "RESET_OVERRIDE" : BLE切断時などに手動オーバーライドを解除し、タイマー制御へ復帰する
+    """
+    global _pump_state, _led_state, _pump_manual_override, _led_manual_override
 
-def set_pump_manual(state):
-    """手動操作でポンプをON/OFFし、以後のタイマー判定を一時的にスルーする"""
-    global _pump_state, _pump_manual_override
-    _pump_manual_override = True
-    _pump_state = 1 if state else 0
-    if _pump_pin:
-        _pump_pin.value(_pump_state)
+    if command == "SET_TIMER":
+        for key in ("p_time", "p_sec", "l_time", "l_min"):
+            if key in payload:
+                _timer_config[key] = payload[key]
+        print("[INFO] タイマー設定を更新しました:", _timer_config)
 
+    elif command == "PUMP":
+        _pump_manual_override = True
+        _pump_state = 1 if payload else 0
+        if _pump_pin:
+            _pump_pin.value(_pump_state)
 
-def set_led_manual(state):
-    """手動操作でLEDをON/OFFし、以後のタイマー判定を一時的にスルーする"""
-    global _led_state, _led_manual_override
-    _led_manual_override = True
-    _led_state = 1 if state else 0
-    if _led_pin:
-        _led_pin.value(_led_state)
+    elif command == "LED":
+        _led_manual_override = True
+        _led_state = 1 if payload else 0
+        if _led_pin:
+            _led_pin.value(_led_state)
 
-
-def reset_actuator_overrides():
-    """BLE切断時に手動オーバーライドを解除し、タイマー制御へ復帰させる"""
-    global _pump_manual_override, _led_manual_override
-    _pump_manual_override = False
-    _led_manual_override = False
+    elif command == "RESET_OVERRIDE":
+        _pump_manual_override = False
+        _led_manual_override = False
 
 
 def _hhmm_to_seconds(hhmm):

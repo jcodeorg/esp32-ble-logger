@@ -18,12 +18,12 @@ ACTIVE_PROFILE = "pump_led"
 if ACTIVE_PROFILE == "pump_led":
     from sensors_actuators import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
-        update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
+        handle_actuator_command,
     )
 else:
     from sensors import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
-        update_timer_config, set_pump_manual, set_led_manual, reset_actuator_overrides,
+        handle_actuator_command,
     )
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
@@ -209,7 +209,7 @@ class BLEUARTServer:
                 print("[BLE] 切断されました - タイマー自動制御に復帰します")
                 # 手動オーバーライドを解除し、アクチュエータをタイマー判定に委ねる
                 try:
-                    reset_actuator_overrides()
+                    handle_actuator_command("RESET_OVERRIDE")
                 except Exception as e:
                     print("[ERROR] アクチュエータオーバーライド解除中に例外発生:", e)
                 self._advertise(self._name)
@@ -294,19 +294,19 @@ class BLEUARTServer:
                 try:
                     import json
                     config = json.loads(cmd[len("SET_TIMER:"):])
-                    update_timer_config(config)
+                    handle_actuator_command("SET_TIMER", config)
                     self.send("OK_TIMER_SET\n")
                 except Exception as e:
                     print("[ERROR] タイマー設定失敗:", e, "受信文字列:", cmd)
 
             elif cmd.startswith("PUMP:"):
                 # 手動操作コマンド: PUMP:1 / PUMP:0
-                set_pump_manual(cmd[len("PUMP:"):] == "1")
+                handle_actuator_command("PUMP", cmd[len("PUMP:"):] == "1")
                 self.send("OK_MANUAL\n")
 
             elif cmd.startswith("LED:"):
                 # 手動操作コマンド: LED:1 / LED:0
-                set_led_manual(cmd[len("LED:"):] == "1")
+                handle_actuator_command("LED", cmd[len("LED:"):] == "1")
                 self.send("OK_MANUAL\n")
         except Exception as e:
             print("[ERROR] コマンド処理中に例外発生:", e)
