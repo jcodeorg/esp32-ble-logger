@@ -2,13 +2,20 @@ import time
 import struct
 import bluetooth
 import machine
-from machine import Pin, SoftI2C, RTC, ADC
+from machine import Pin, SoftI2C, RTC
 import ssd1306  # OLEDディスプレイ用（I2C用）
-from ahtx0 import AHT20
 
 # ==========================================
 # 1. 設定・初期化
 # ==========================================
+
+# 使用するデバイス構成。書き込み対象のハードウェアに合わせて "soil_cds" / "pump_led" を選択する
+ACTIVE_PROFILE = "soil_cds"
+
+if ACTIVE_PROFILE == "pump_led":
+    from profiles.profile_pump_led import DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators
+else:
+    from profiles.profile_soil_cds import DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
 MEASURE_INTERVAL = 3 # 3600 
@@ -53,36 +60,8 @@ oled_flash_until = 0
 # BLEデバイス名（BLEUARTServer初期化後にセットされる）
 ble_device_name = ""
 
-# A1: 土壌水分センサ用 ADC を初期化する
-adc_soil = ADC(Pin(1, Pin.IN))
-adc_soil.atten(ADC.ATTN_11DB)   # 0〜3.3V の範囲を読む
-adc_soil.width(ADC.WIDTH_12BIT) # 分解能 12 ビット（0〜4095）
-
-# A2: CdS 照度センサ用 ADC を初期化する
-adc_cds = ADC(Pin(2, Pin.IN))
-adc_cds.atten(ADC.ATTN_11DB)
-adc_cds.width(ADC.WIDTH_12BIT)
-
-# センサーの初期化（ダミー関数。実際のセンサーに合わせて書き換えてください）
-def read_sensor():
-    """AHT20センサーから温湿度を取得する"""
-
-    try:
-        aht20 = AHT20(i2c)
-        temp = round(aht20.temperature, 1)
-        humid = round(aht20.relative_humidity, 1)
-    except Exception as e:
-        print("AHT20 error:", e)
-        temp = 0.0
-        humid = 0.0
-    try:
-        soil = adc_soil.read()
-        light = adc_cds.read()
-    except Exception as e:
-        print("ADC error:", e)
-        soil = 0
-        light = 0
-    return temp, humid, soil, light
+# アクティブなプロファイルのセンサーを初期化する
+init_sensors(i2c)
 
 def get_formatted_time():
     t = rtc.datetime()
@@ -93,7 +72,7 @@ def epoch_to_str(epoch):
     t = time.localtime(epoch)
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(t[0], t[1], t[2], t[3], t[4], t[5])
 
-def update_oled(temp, humid, soil, light, status_msg=None):
+def update_oled(sensor_data, status_msg=None):
     if not display:
         return
     if status_msg is None:
@@ -109,10 +88,14 @@ def update_oled(temp, humid, soil, light, status_msg=None):
     else:
         display.text(f"{ble_device_name}", 0, dy*0, 1)
     display.text(f"Time : {get_formatted_time().split()[1]}", 0, dy*1, 1)
-    display.text(f"Temp : {temp:.1f} C", 0, dy*2, 1)
-    display.text(f"Humid: {humid:.1f} %", 0, dy*3, 1)
-    display.text(f"Soil : {soil}", 0, dy*4, 1)
-    display.text(f"light: {light}", 0, dy*5, 1)
+
+    # CSV_FIELDSの並び順でセンサー値を表示する（画面の行数上限に収まる分だけ）
+    max_data_lines = 4
+    line = 2
+    for key in CSV_FIELDS[:max_data_lines]:
+        display.text(f"{key}: {sensor_data.get(key)}", 0, dy*line, 1)
+        line += 1
+
     display.text(f"Log:{len(log_buffer)} {status_msg}", 0, dy*6, 1)
     
     display.show()
@@ -128,7 +111,7 @@ class BLEUARTServer:
 
         if name is None:
             mac = self._ble.config('mac')[1]  # 6バイトのMACアドレス
-            name = "EnvLog-" + self.get_friendly_name(mac)
+            name = "EnvLog-" + DEVICE_TYPE + "-" + self.get_friendly_name(mac)
 
         # Nordic UART Service の UUID（RX=書き込み用, TX=通知用。ブラウザ側と合わせる）
         self.UART_UUID = bluetooth.UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
@@ -246,15 +229,14 @@ class BLEUARTServer:
             elif cmd == "GET_LOG":
                 # ログデータ一括送信
                 print("[INFO] ログデータを送信します...")
-                # CSVヘッダーとデータをまとめて送信
-                header = "timestamp,temperature,humidity\n"
+                # CSVヘッダーはアクティブなプロファイルのCSV_FIELDSに合わせて動的に生成する
+                header = "timestamp," + ",".join(CSV_FIELDS) + ",device\n"
                 self.send(header)
                 time.sleep(0.1)
                 
                 for row in log_buffer:
-                    line = "{},{},{},{},{},{}\n".format(
-                        epoch_to_str(row["epoch"]), row["temp"], row["humid"], row["soil"], row["light"], ble_device_name
-                    )
+                    values = ",".join(str(row[key]) for key in CSV_FIELDS)
+                    line = "{},{},{}\n".format(epoch_to_str(row["epoch"]), values, ble_device_name)
                     self.send(line)
                     time.sleep(0.05) # パケットあふれ防止のウェイト
                 # ブラウザ側が固定タイムアウトではなく完了を検知できるようにマーカーを送る
@@ -288,13 +270,19 @@ def main():
             print("[ERROR] BLE初期化失敗。5秒後にリトライします:", e)
             time.sleep(5)
 
-    # 起動直後の初期値取得
-    temp, humid, soil, light = 0.0, 0.0, 0, 0
+    # アクティブなプロファイルのアクチュエータを初期化する（このプロファイルに無ければ何もしない）
     try:
-        temp, humid, soil, light = read_sensor()
+        init_actuators()
+    except Exception as e:
+        print("[ERROR] アクチュエータ初期化失敗:", e)
+
+    # 起動直後の初期値取得
+    sensor_data = {key: 0 for key in CSV_FIELDS}
+    try:
+        sensor_data = read_sensor(i2c)
     except Exception as e:
         print("[ERROR] 起動時センサー読み取り失敗:", e)
-    update_oled(temp, humid, soil, light, "Started")
+    update_oled(sensor_data, "Started")
 
     while True:
         if wdt:
@@ -302,20 +290,20 @@ def main():
 
         current_tick = time.time()
 
+        # アクチュエータのタイマー制御（毎秒。失敗してもループ自体は継続する）
+        try:
+            tick_actuators(current_tick)
+        except Exception as e:
+            print("[ERROR] アクチュエータ制御中に例外発生:", e)
+
         # 1時間（MEASURE_INTERVAL）ごとの計測（センサー障害やメモリ不足があっても稼働を継続する）
         if current_tick - last_measure_tick >= MEASURE_INTERVAL or last_measure_tick == 0:
             try:
-                temp, humid, soil, light = read_sensor()
+                sensor_data = read_sensor(i2c)
 
                 # RTC未同期でも蓄積し、epochとsynced状態を記録しておく（同期時に過去分のepochを補正する）
-                row = {
-                    "epoch": time.time(),
-                    "temp": temp,
-                    "humid": humid,
-                    "soil": soil,
-                    "light": light,
-                    "synced": rtc_synced,
-                }
+                row = {"epoch": time.time(), "synced": rtc_synced}
+                row.update(sensor_data)
                 log_buffer.append(row)
 
                 # 上限を超えたら古いデータから破棄してメモリ枯渇を防ぐ
@@ -323,7 +311,8 @@ def main():
                     del log_buffer[0 : len(log_buffer) - MAX_LOG_ENTRIES]
 
                 status = "" if rtc_synced else "（RTC未同期、後で補正されます）"
-                print(f"[計測] {epoch_to_str(row['epoch'])} - Temp: {temp}C, humid: {humid}%, soil: {soil}, light: {light} (累計: {len(log_buffer)}件){status}")
+                values_str = ", ".join(f"{key}: {sensor_data[key]}" for key in CSV_FIELDS)
+                print(f"[計測] {epoch_to_str(row['epoch'])} - {values_str} (累計: {len(log_buffer)}件){status}")
 
                 last_measure_tick = current_tick
             except Exception as e:
@@ -332,9 +321,9 @@ def main():
 
         # OLEDの画面更新（毎秒。失敗してもループ自体は継続する）
         try:
-            temp, humid, soil, light = read_sensor()
+            sensor_data = read_sensor(i2c)
             flash = oled_flash_msg if oled_flash_msg and time.time() < oled_flash_until else None
-            update_oled(temp, humid, soil, light, flash)
+            update_oled(sensor_data, flash)
         except Exception as e:
             print("[ERROR] OLED更新中に例外発生:", e)
 
