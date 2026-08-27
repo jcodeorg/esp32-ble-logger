@@ -2,6 +2,7 @@ import time
 import struct
 import bluetooth
 import machine
+import gc
 from machine import Pin, SoftI2C, RTC
 import ssd1306  # OLEDディスプレイ用（I2C用）
 
@@ -25,12 +26,28 @@ last_measure_tick = 0
 MAX_LOG_ENTRIES = 5000
 
 # ウォッチドッグタイマー: この秒数以内にfeed()されないとデバイスを自動リセットする
+# ESP32のWDTは一度起動すると停止できないため、このフラグファイルがある間はThonnyでの
+# メンテナンス作業がリセットで妨げられないよう、起動をスキップする
 WDT_TIMEOUT_MS = 15000
-try:
-    wdt = machine.WDT(timeout=WDT_TIMEOUT_MS)
-except Exception as e:
-    print("[WARN] WDT初期化失敗（このボードでは未対応の可能性）:", e)
-    wdt = None
+MAINTENANCE_FLAG_FILE = "maintenance.flag"
+
+def _is_maintenance_mode():
+    try:
+        import os
+        os.stat(MAINTENANCE_FLAG_FILE)
+        return True
+    except OSError:
+        return False
+
+wdt = None
+if _is_maintenance_mode():
+    print("[INFO] {} を検知したためメンテナンスモードで起動します（WDT無効）".format(MAINTENANCE_FLAG_FILE))
+else:
+    try:
+        wdt = machine.WDT(timeout=WDT_TIMEOUT_MS)
+    except Exception as e:
+        print("[WARN] WDT初期化失敗（このボードでは未対応の可能性）:", e)
+        wdt = None
 
 # I2Cピンの定義（お使いのボードに合わせてSCL/SDAを変更してください。例: SCL=23, SDA=22）
 i2c = SoftI2C(scl=Pin(23), sda=Pin(22))
@@ -108,10 +125,15 @@ class BLEUARTServer:
         self._ble = bluetooth.BLE()
         self._ble.active(True)
         self._ble.irq(self._irq)
+        # 既定のMTU(23バイト)だとCSV1行が収まらず分割/失敗するため、大きめのMTUを要求する
+        try:
+            self._ble.config(mtu=200)
+        except Exception as e:
+            print("[WARN] MTU設定失敗:", e)
 
         if name is None:
             mac = self._ble.config('mac')[1]  # 6バイトのMACアドレス
-            name = "EnvLog-" + DEVICE_TYPE + "-" + self.get_friendly_name(mac)
+            name = "EnvLog-" + self.get_friendly_name(mac) + "-" + DEVICE_TYPE
 
         # Nordic UART Service の UUID（RX=書き込み用, TX=通知用。ブラウザ側と合わせる）
         self.UART_UUID = bluetooth.UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
@@ -130,6 +152,8 @@ class BLEUARTServer:
         ((self._rx_handle, self._tx_handle),) = self._ble.gatts_register_services(SERVICES)
         # デフォルトの受信バッファ(約20バイト)だとTIME:コマンドが途中で切れるため拡張する
         self._ble.gatts_set_buffer(self._rx_handle, 200, False)
+        # CSV1行分の通知データ（60〜100バイト程度）が既定バッファ(約20バイト)を超えてENOMEMになるため拡張する
+        self._ble.gatts_set_buffer(self._tx_handle, 250, False)
         
         self._conn_handle = None
         self._name = name
@@ -183,11 +207,21 @@ class BLEUARTServer:
             print("[ERROR] BLE割り込み処理中に例外発生:", e)
 
     def send(self, data):
-        try:
-            if self._conn_handle is not None:
+        # BLEスタックの送信バッファが一時的に枯渇（ENOMEM）しても少し待ってリトライする
+        max_retries = 8
+        for attempt in range(max_retries):
+            try:
+                if self._conn_handle is None:
+                    return False
                 self._ble.gatts_notify(self._conn_handle, self._tx_handle, data)
-        except Exception as e:
-            print("[ERROR] BLE送信失敗:", e)
+                return True
+            except OSError:
+                time.sleep(0.2)
+            except Exception as e:
+                print("[ERROR] BLE送信失敗:", e)
+                return False
+        print("[ERROR] BLE送信失敗（バッファ枯渇のためリトライ上限に到達）")
+        return False
 
     def _advertise(self, name):
         adv_data = bytearray(b'\x02\x01\x06') + bytearray((len(name) + 1, 0x09)) + name.encode()
@@ -234,11 +268,14 @@ class BLEUARTServer:
                 self.send(header)
                 time.sleep(0.1)
                 
-                for row in log_buffer:
+                for row_index, row in enumerate(log_buffer):
                     values = ",".join(str(row[key]) for key in CSV_FIELDS)
                     line = "{},{},{}\n".format(epoch_to_str(row["epoch"]), values, ble_device_name)
                     self.send(line)
                     time.sleep(0.05) # パケットあふれ防止のウェイト
+                    # 送信中のGC発生によるタイミング不安定を避けるため、定期的にメモリを回収して断片化を抑える
+                    if row_index % 20 == 0:
+                        gc.collect()
                 # ブラウザ側が固定タイムアウトではなく完了を検知できるようにマーカーを送る
                 self.send("END_LOG\n")
                 print("[INFO] 送信完了")
