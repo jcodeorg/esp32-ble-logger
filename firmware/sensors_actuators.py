@@ -11,6 +11,7 @@ main.py から呼ばれる共通インターフェース:
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる）
     handle_actuator_command(command, payload) : SET_TIMER/PUMP/LED/RESET_OVERRIDE をまとめて処理する
         （タイマー制御仕様 timer_control_spec.md 参照）
+    get_display_lines() : OLEDの空き行に追加表示する文字列のリストを返す（未設定なら空リスト）
 """
 import time
 from machine import Pin, ADC
@@ -122,6 +123,22 @@ def handle_actuator_command(command, payload=None):
     elif command == "RESET_OVERRIDE":
         _pump_manual_override = False
         _led_manual_override = False
+
+
+def get_display_lines():
+    """OLEDの空き行に表示するタイマー設定の要約を1行で返す（PhhmmssLhhmmhhmm形式。未設定の項目は空白で埋める）"""
+    if _timer_config["p_sec"] > 0:
+        p_part = "{}{:02d}".format(_timer_config["p_time"].replace(":", ""), _timer_config["p_sec"])
+    else:
+        p_part = " " * 6
+
+    if _timer_config["l_min"] > 0:
+        l_hour, l_minute = divmod(_timer_config["l_min"], 60)
+        l_part = "{}{:02d}{:02d}".format(_timer_config["l_time"].replace(":", ""), l_hour, l_minute)
+    else:
+        l_part = " " * 8
+
+    return ["P" + p_part + "L" + l_part]
 
 
 def _hhmm_to_seconds(hhmm):

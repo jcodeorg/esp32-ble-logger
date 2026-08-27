@@ -9,6 +9,7 @@ main.py から呼ばれる共通インターフェース:
     init_actuators()    : アクチュエータの初期化（起動時に1回呼ばれる。このプロファイルでは未使用）
     tick_actuators(now_epoch) : アクチュエータのタイマー制御（メインループから毎秒呼ばれる。このプロファイルでは未使用）
     handle_actuator_command(command, payload) : SET_TIMER/PUMP/LED/RESET_OVERRIDE をまとめて処理する（このプロファイルでは未使用）
+    get_display_lines() : OLEDの空き行に追加表示する文字列のリストを返す（このプロファイルでは常に空リスト）
 """
 from machine import Pin, ADC
 from ahtx0 import AHT20
@@ -64,3 +65,7 @@ def tick_actuators(now_epoch):
 
 def handle_actuator_command(command, payload=None):
     pass  # このプロファイルにはアクチュエータなし
+
+
+def get_display_lines():
+    return []  # このプロファイルにはアクチュエータなし

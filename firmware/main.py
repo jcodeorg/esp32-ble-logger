@@ -18,20 +18,20 @@ ACTIVE_PROFILE = "pump_led"
 if ACTIVE_PROFILE == "pump_led":
     from sensors_actuators import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
-        handle_actuator_command,
+        handle_actuator_command, get_display_lines,
     )
 else:
     from sensors import (
         DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators,
-        handle_actuator_command,
+        handle_actuator_command, get_display_lines,
     )
 
 # 測定間隔（秒）: 1時間 = 3600秒 (テスト時は短くしてください)
-MEASURE_INTERVAL = 3 # 3600 
+MEASURE_INTERVAL = 3600 # 3600 
 last_measure_tick = 0
 
 # RAM上に保持するログの上限件数（超過分は古い方から破棄してメモリ枯渇を防ぐ）
-MAX_LOG_ENTRIES = 5000
+MAX_LOG_ENTRIES = 2000
 
 # ウォッチドッグタイマー: この5分以内にfeed()されないとデバイスを自動リセットする
 # ESP32のWDTは一度起動すると停止できないため、このフラグファイルがある間はThonnyでの
@@ -72,7 +72,7 @@ rtc = RTC()
 # RAM上のログバッファ（ここに1時間ごとのデータを蓄積）
 log_buffer = []
 
-# BLE経由でRTCが同期されるまではログを蓄積しない
+# BLE経由でRTCが同期されたか
 rtc_synced = False
 
 # BLE中央側（ブラウザ）が現在接続中か
@@ -112,13 +112,30 @@ def update_oled(sensor_data, status_msg=None):
         display.text(f"{ble_device_name}", 0, dy*0, 0)
     else:
         display.text(f"{ble_device_name}", 0, dy*0, 1)
-    display.text(f"Time : {get_formatted_time().split()[1]}", 0, dy*1, 1)
+    # 日付+時刻を "Dmm/dd hh:mm:ss" 形式の1行にまとめて表示する
+    date_part, time_part = get_formatted_time().split()
+    display.text("D {}/{} {}".format(date_part[5:7], date_part[8:10], time_part), 0, dy*1, 1)
 
-    # CSV_FIELDSの並び順でセンサー値を表示する（画面の行数上限に収まる分だけ）
-    max_data_lines = 4
+    # 温度・湿度は1行にまとめて表示し、空いた行を他の情報表示にまわす
     line = 2
-    for key in CSV_FIELDS[:max_data_lines]:
+    if "temp" in sensor_data and "humid" in sensor_data:
+        display.text("{:.1f}C / {:.1f}%".format(sensor_data["temp"], sensor_data["humid"]), 0, dy*line, 1)
+        line += 1
+
+    # 温度・湿度以外のセンサー値を表示する
+    max_line = 5  # line6はログ件数表示用に予約する
+    other_fields = [key for key in CSV_FIELDS if key not in ("temp", "humid")]
+    for key in other_fields:
+        if line > max_line:
+            break
         display.text(f"{key}: {sensor_data.get(key)}", 0, dy*line, 1)
+        line += 1
+
+    # 温度・湿度を1行にまとめて空いた行に、タイマー設定を表示する（未設定なら何も表示しない）
+    for timer_line in get_display_lines():
+        if line > max_line:
+            break
+        display.text(timer_line, 0, dy*line, 1)
         line += 1
 
     display.text(f"Log:{len(log_buffer)} {status_msg}", 0, dy*6, 1)
