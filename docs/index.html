@@ -262,19 +262,33 @@
                 
                 await rxCharacteristic.writeValue(new TextEncoder().encode("GET_LOG\n"));
 
-                // デバイスが送信完了マーカー(END_LOG)を送るまで待つ（件数が多くても取りこぼさないように）
-                const waitForEndMarker = () => new Promise((resolve, reject) => {
-                    const timeoutMs = 15000; // 万一マーカーが届かない場合の保険
+                // デバイスが送信完了マーカー(END_LOG)を送るまで待つ
+                // 件数が多いと送信に時間がかかるため、固定時間ではなく「データが届き続けている間は待ち続け、
+                // 一定時間新しいデータが来なくなったら終了」という無通信タイムアウト方式にする
+                const waitForEndMarker = () => new Promise((resolve) => {
+                    const inactivityTimeoutMs = 5000; // この時間、新規データが来なければ打ち切る
+                    const hardTimeoutMs = 120000; // 万一マーカーが届かない場合の絶対上限
                     const intervalMs = 100;
-                    let waited = 0;
+                    let waitedSinceLastData = 0;
+                    let totalWaited = 0;
+                    let lastLength = incomingDataBuffer.length;
                     const timer = setInterval(() => {
                         if (incomingDataBuffer.includes("END_LOG")) {
                             clearInterval(timer);
                             resolve();
                             return;
                         }
-                        waited += intervalMs;
-                        if (waited >= timeoutMs) {
+
+                        if (incomingDataBuffer.length !== lastLength) {
+                            // 新しいデータが届いたので無通信タイマーをリセットする
+                            lastLength = incomingDataBuffer.length;
+                            waitedSinceLastData = 0;
+                        } else {
+                            waitedSinceLastData += intervalMs;
+                        }
+                        totalWaited += intervalMs;
+
+                        if (waitedSinceLastData >= inactivityTimeoutMs || totalWaited >= hardTimeoutMs) {
                             clearInterval(timer);
                             resolve(); // タイムアウト時もここまで受信した分で処理を続行する
                         }
