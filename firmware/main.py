@@ -11,7 +11,9 @@ import ssd1306  # OLEDディスプレイ用（I2C用）
 # ==========================================
 
 # 使用するデバイス構成。書き込み対象のハードウェアに合わせて "soil_cds" / "pump_led" を選択する
-ACTIVE_PROFILE = "soil_cds"
+
+# ACTIVE_PROFILE = "soil_cds"
+ACTIVE_PROFILE = "pump_led"
 
 if ACTIVE_PROFILE == "pump_led":
     from profiles.profile_pump_led import DEVICE_TYPE, CSV_FIELDS, init_sensors, read_sensor, init_actuators, tick_actuators
