@@ -102,7 +102,7 @@ esp32-ble-logger/
 * **LED照明**（リレー/MOSFET経由でGPIO制御。タイマーで点灯・消灯）
 
 ```text
-esp32-ble-logger/
+/
 ├── boot.py             # 起動時の初期設定（NeoPixcel消灯）
 ├── main.py             # メイン処理（計測・BLE・データ管理。デバイス構成は共通）
 ├── sensors_actuators.py # 別構成: 照度センサー(BH1750) + 水中ポンプ + LEDタイマー制御
