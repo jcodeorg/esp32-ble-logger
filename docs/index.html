@@ -318,7 +318,7 @@
             try {
                 appendLog("BLEデバイスをスキャン中...");
                 bluetoothDevice = await navigator.bluetooth.requestDevice({
-                    acceptAllDevices: true,
+                    filters: [{ namePrefix: "EnvLog" }, { namePrefix: "PcrIoT" }],
                     optionalServices: [SERVICE_UUID]
                 });
 
